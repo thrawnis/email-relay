@@ -64,10 +64,49 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
 
     def client_ip(request: Request) -> str | None:
         if settings.trust_proxy:
-            fwd = request.headers.get("x-forwarded-for")
-            if fwd:
-                return fwd.split(",")[0].strip()
+            h = request.headers
+            # Cloudflare Tunnel sets CF-Connecting-IP; Nginx Proxy Manager sets X-Real-IP to the peer address.
+            for name in ("cf-connecting-ip", "x-real-ip"):
+                if h.get(name):
+                    return h[name].strip()
+            if h.get("x-forwarded-for"):
+                return h["x-forwarded-for"].split(",")[-1].strip()  # entry added by the nearest proxy
         return request.client.host if request.client else None
+
+    def via_cloudflare(request: Request) -> bool:
+        return "cf-connecting-ip" in request.headers or "cf-ray" in request.headers
+
+    def is_https(request: Request) -> bool:
+        if settings.trust_proxy and request.headers.get("x-forwarded-proto"):
+            return request.headers["x-forwarded-proto"].split(",")[0].strip().lower() == "https"
+        return request.url.scheme == "https"
+
+    @app.middleware("http")
+    async def transport_policy(request: Request, call_next):
+        path = request.url.path
+        if path == "/healthz":  # container healthcheck talks to the app directly over HTTP
+            return await call_next(request)
+        if settings.require_https and not is_https(request):
+            log.warning("Refused plain-HTTP request %s %s from %s", request.method, path, client_ip(request))
+            if request.method == "POST" and path == "/api/send":
+                db.insert_message(key_id=None, app_name="(plain HTTP)", from_addr=None, recipients=None,
+                                  subject=None, status="rejected", client_ip=client_ip(request),
+                                  error="HTTPS required; request arrived over plain HTTP")
+            return JSONResponse({"error": "HTTPS required"}, status_code=403)
+        if settings.block_api_via_cloudflare and path.startswith("/api/") and via_cloudflare(request):
+            log.warning("Refused %s %s via Cloudflare from %s", request.method, path, client_ip(request))
+            if request.method == "POST" and path == "/api/send":
+                db.insert_message(key_id=None, app_name="(via Cloudflare)", from_addr=None, recipients=None,
+                                  subject=None, status="rejected", client_ip=client_ip(request),
+                                  error="The send API is only reachable from the internal network")
+            return JSONResponse({"error": "The API is only available on the internal network"}, status_code=403)
+        response = await call_next(request)
+        if settings.require_https:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
 
     # ------------------------------------------------------------ public API
     def reject(status: int, error: str, *, request: Request, key: dict | None = None,

@@ -1,16 +1,25 @@
 # Image is built by ./rebuild.sh (docker buildx build --load), not by `docker compose build`.
+#
+# No host port is published: the relay is only reachable through Nginx Proxy Manager
+# (and optionally cloudflared) over the shared Docker network named by PROXY_NETWORK.
+# Proxy target from NPM / cloudflared:  http://email-relay:8000
 services:
   email-relay:
     image: email-relay:latest
     container_name: email-relay
     env_file: .env
-    ports:
-      - "${RELAY_BIND:-0.0.0.0}:${RELAY_PORT:-8025}:8000"
     volumes:
       - ./data:/data
+    networks:
+      - proxy
     restart: unless-stopped
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?Set PROXY_NETWORK in .env to the Docker network Nginx Proxy Manager is on}

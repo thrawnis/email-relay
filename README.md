@@ -39,6 +39,7 @@ Edit `.env` and set at least:
 - `ADMIN_PASSWORD`
 - `SECRET_KEY` (generate it with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`)
 - `MAIL_FROM` and the `SMTP_*` settings for `notify@thetruesource.com`
+- `PROXY_NETWORK`: the Docker network Nginx Proxy Manager is on (see below)
 
 `.env` is git-ignored, so the real credentials stay on the server only.
 
@@ -48,10 +49,67 @@ Then build and start:
 ./rebuild.sh --force
 ```
 
-The admin UI is at `http://<host>:8025/admin` (change the port with `RELAY_PORT`). Put it behind your reverse proxy / HTTPS
-and set `COOKIE_SECURE=true` (and `TRUST_PROXY=true` if the proxy sets `X-Forwarded-For`).
-
 To try it without sending real mail, set `MAIL_BACKEND=console`. Messages are then printed to `docker compose logs` instead of being sent.
+
+## HTTPS: Nginx Proxy Manager + Cloudflare Tunnel
+
+```
+ homelab apps ──HTTPS──▶ Nginx Proxy Manager ──┐
+ you (LAN)    ──HTTPS──▶ Nginx Proxy Manager ──┼──http (Docker network)──▶ email-relay:8000
+ you (remote) ──HTTPS──▶ Cloudflare ─tunnel─▶ cloudflared ┘   (admin UI only; /api/* refused)
+```
+
+The relay publishes **no host port**. It is reachable only through the proxies on the shared Docker network, and it enforces the rules itself:
+
+| Setting | Effect |
+|---|---|
+| `REQUIRE_HTTPS=true` | Any request whose `X-Forwarded-Proto` isn't `https` gets a 403. Plain-HTTP send attempts are logged as rejected. Responses carry HSTS. `/healthz` is exempt for the container healthcheck. |
+| `BLOCK_API_VIA_CLOUDFLARE=true` | `/api/*` requests that carry Cloudflare headers (`CF-Connecting-IP` / `CF-Ray`) are refused and logged. The tunnel can only ever reach the admin UI, even if its ingress rules are too broad. |
+| `TRUST_PROXY=true` | Takes the client IP from `CF-Connecting-IP`, `X-Real-IP` or `X-Forwarded-For` and the scheme from `X-Forwarded-Proto`, so logs and login throttling see real addresses. |
+| `COOKIE_SECURE=true` | The admin session cookie is only ever sent over HTTPS. |
+
+### 1. Docker network
+
+Find the network NPM is on and set it as `PROXY_NETWORK` in `.env`:
+
+```bash
+docker network ls
+```
+
+```bash
+docker inspect <npm-container> --format '{{json .NetworkSettings.Networks}}'
+```
+
+If NPM runs on a different machine, there's no shared network. In that case add `ports: ["<lan-ip>:8025:8000"]` to the
+service and firewall that port so only the NPM host can reach it.
+
+### 2. Nginx Proxy Manager (internal traffic)
+
+Add a Proxy Host:
+- **Domain:** `relay.thetruesource.com`, or a name like `relay.home.thetruesource.com`. Point it at NPM in your local DNS (Pi-hole, AdGuard, router) only.
+- **Scheme / Forward host / Port:** `http` / `email-relay` / `8000`.
+- **SSL tab:** request a Let's Encrypt certificate **using a DNS challenge** with Cloudflare as the provider and a Cloudflare API token with `Zone:DNS:Edit`. Enable **Force SSL**, **HTTP/2** and **HSTS**.
+
+The DNS challenge gives you a real, publicly trusted certificate for a name that only resolves on your LAN. Nothing needs
+to be exposed to the internet, and no app needs a custom CA or `verify=False`. NPM already sends `X-Real-IP` and
+`X-Forwarded-Proto`, so nothing is needed in the Advanced tab.
+
+Apps then send to `https://relay.thetruesource.com/api/send`.
+
+### 3. Cloudflare Tunnel (remote admin access)
+
+- Add a public hostname, for example `relay-admin.thetruesource.com`, with service `http://email-relay:8000`. This needs cloudflared on the same Docker network; otherwise point it at NPM.
+- **Put a Cloudflare Access application in front of it** (Zero Trust → Access → Applications). Use a policy that allows only your email, with one-time PIN or SSO. The admin password then becomes a second layer instead of the only one.
+- The relay refuses `/api/*` on this path anyway. If you want the tunnel to drop those requests before they reach the relay, add an ingress rule that only matches `^/(admin|static)`.
+
+### Self-signed certificates
+
+If you use a self-signed or private-CA certificate in NPM instead of Let's Encrypt, make each app trust the CA. Don't turn
+off verification. Use `REQUESTS_CA_BUNDLE=/path/ca.crt` (Python requests), `SSL_CERT_FILE` (httpx),
+`NODE_EXTRA_CA_CERTS` (Node), `curl --cacert`, or install the CA host-wide with `update-ca-certificates`.
+
+The relay's own outbound SMTP connection always verifies certificates. If the SMTP server uses a private CA, put the CA
+certificate in `./data/` and set `SMTP_CA_FILE=/data/<name>.crt`. Don't use `SMTP_SECURITY=none`.
 
 ### `rebuild.sh`
 
@@ -84,7 +142,7 @@ Run **one** container with **one** uvicorn worker. The delivery queue runs insid
 Authenticate with `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 
 ```bash
-curl -X POST https://relay.internal/api/send \
+curl -X POST https://relay.thetruesource.com/api/send \
   -H "Authorization: Bearer erk_..." \
   -H "Content-Type: application/json" \
   -d '{
@@ -112,7 +170,7 @@ Python example:
 
 ```python
 import base64, requests
-requests.post("https://relay.internal/api/send", headers={"Authorization": f"Bearer {KEY}"}, json={
+requests.post("https://relay.thetruesource.com/api/send", headers={"Authorization": f"Bearer {KEY}"}, json={
     "to": "alice@example.com", "subject": "Report", "text": "See attached.",
     "attachments": [{"filename": "report.pdf", "content_type": "application/pdf",
                      "content": base64.b64encode(open("report.pdf", "rb").read()).decode()}],

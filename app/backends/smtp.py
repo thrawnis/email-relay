@@ -11,8 +11,10 @@ from .base import Backend, PermanentError, SendResult, TransientError, build_mim
 class SMTPBackend(Backend):
     name = "smtp"
 
-    def __init__(self, host: str, port: int, username: str, password: str, security: str, timeout: int):
+    def __init__(self, host: str, port: int, username: str, password: str, security: str, timeout: int,
+                 ca_file: str = ""):
         self.host, self.port = host, port
+        self.ca_file = ca_file
         self.username, self.password = username, password
         self.security, self.timeout = security, timeout
 
@@ -20,7 +22,8 @@ class SMTPBackend(Backend):
         return f"smtp://{self.host}:{self.port} ({self.security})"
 
     def _connect(self) -> smtplib.SMTP:
-        ctx = ssl.create_default_context()
+        # Certificates are always verified; SMTP_CA_FILE adds a private CA for a self-signed server.
+        ctx = ssl.create_default_context(cafile=self.ca_file or None)
         if self.security == "ssl":
             conn = smtplib.SMTP_SSL(self.host, self.port, timeout=self.timeout, context=ctx)
         else:

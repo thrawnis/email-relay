@@ -59,8 +59,11 @@ class Settings:
     max_recipients: int = 50
     max_attachment_bytes: int = 10 * 1024 * 1024
 
-    # Trust X-Forwarded-For for client IPs (only behind a reverse proxy you control)
-    trust_proxy: bool = False
+    # Reverse proxy / transport security
+    trust_proxy: bool = False        # read client IP + scheme from proxy headers (NPM, Cloudflare Tunnel)
+    require_https: bool = False      # reject requests that did not arrive over HTTPS at the proxy
+    block_api_via_cloudflare: bool = True  # /api/* is LAN-only: refuse requests carrying Cloudflare headers
+    smtp_ca_file: str = ""           # extra CA bundle for a self-signed SMTP server
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -89,6 +92,9 @@ class Settings:
             max_recipients=_int("MAX_RECIPIENTS", 50),
             max_attachment_bytes=_int("MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024),
             trust_proxy=_bool("TRUST_PROXY", False),
+            require_https=_bool("REQUIRE_HTTPS", False),
+            block_api_via_cloudflare=_bool("BLOCK_API_VIA_CLOUDFLARE", True),
+            smtp_ca_file=_env("SMTP_CA_FILE"),
         )
 
     def validate(self) -> list[str]:
@@ -101,6 +107,10 @@ class Settings:
             problems.append("MAIL_FROM is not set")
         if self.mail_backend == "smtp" and not self.smtp_host:
             problems.append("SMTP_HOST is not set (MAIL_BACKEND=smtp)")
+        if self.require_https and not self.trust_proxy:
+            problems.append("REQUIRE_HTTPS=true needs TRUST_PROXY=true (HTTPS is terminated at the proxy)")
+        if self.smtp_ca_file and not os.path.isfile(self.smtp_ca_file):
+            problems.append(f"SMTP_CA_FILE {self.smtp_ca_file} does not exist")
         if self.smtp_security not in ("starttls", "ssl", "none"):
             problems.append("SMTP_SECURITY must be starttls, ssl or none")
         return problems
@@ -121,4 +131,6 @@ class Settings:
             "max_recipients": self.max_recipients,
             "max_attachment_bytes": self.max_attachment_bytes,
             "log_retention_days": self.log_retention_days,
+            "require_https": self.require_https,
+            "block_api_via_cloudflare": self.block_api_via_cloudflare,
         }

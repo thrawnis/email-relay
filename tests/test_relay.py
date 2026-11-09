@@ -234,3 +234,61 @@ def test_smtp_error_classification(monkeypatch):
     monkeypatch.setattr(SMTPBackend, "_connect", boom(smtplib.SMTPAuthenticationError(535, b"bad creds")))
     with pytest.raises(TransientError):
         b.send(payload, "n@x.com", None)
+
+
+@pytest.fixture
+def proxied(tmp_path):
+    settings = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "p.db"),
+                        mail_from="notify@thetruesource.com", mail_allowed_from=["notify@thetruesource.com"],
+                        mail_backend="console", trust_proxy=True, require_https=True, cookie_secure=True)
+    app = create_app(settings, FakeBackend())
+    with TestClient(app, base_url="http://relay") as client:
+        yield client, app
+
+
+HTTPS = {"X-Forwarded-Proto": "https", "X-Real-IP": "10.0.0.5"}
+TUNNEL = {**HTTPS, "CF-Connecting-IP": "203.0.113.9", "CF-Ray": "abc"}
+
+
+def test_require_https_rejects_plain_http(proxied):
+    client, app = proxied
+    assert client.get("/admin").status_code == 403
+    assert client.get("/admin", headers={"X-Forwarded-Proto": "http"}).status_code == 403
+    r = client.post("/api/send", json={}, headers={"X-Forwarded-Proto": "http"})
+    assert r.status_code == 403
+    assert app.state.db.query_one("SELECT error FROM messages")["error"].startswith("HTTPS required")
+    assert client.get("/healthz").status_code == 200  # healthcheck stays reachable
+    r = client.get("/admin", headers=HTTPS)
+    assert r.status_code == 200 and "max-age" in r.headers["strict-transport-security"]
+
+
+def test_https_via_proxy_send_and_client_ip(proxied):
+    client, app = proxied
+    client.post("/admin/api/login", json={"password": PASSWORD}, headers=HTTPS)
+    # Secure cookie: the TestClient (plain http base_url) won't resend it, so pass it explicitly
+    cookie = client.cookies.get("relay_admin")
+    key = client.post("/admin/api/keys", json={"name": "svc"}, headers=HTTPS,
+                      cookies={"relay_admin": cookie}).json()["api_key"]
+    r = client.post("/api/send", json={"to": "a@b.com", "subject": "s", "text": "t"},
+                    headers={**HTTPS, "Authorization": f"Bearer {key}"})
+    assert r.status_code == 202
+    assert app.state.db.get_message(r.json()["id"])["client_ip"] == "10.0.0.5"
+
+
+def test_api_blocked_through_cloudflare_tunnel(proxied):
+    client, app = proxied
+    r = client.post("/api/send", json={"to": "a@b.com"}, headers={**TUNNEL, "Authorization": "Bearer x"})
+    assert r.status_code == 403
+    row = app.state.db.query_one("SELECT app_name, client_ip FROM messages")
+    assert row == {"app_name": "(via Cloudflare)", "client_ip": "203.0.113.9"}
+    assert client.get("/api/messages/x", headers=TUNNEL).status_code == 403
+    # admin UI is still reachable through the tunnel
+    assert client.get("/admin", headers=TUNNEL).status_code == 200
+    assert client.post("/admin/api/login", json={"password": PASSWORD}, headers=TUNNEL).status_code == 200
+
+
+def test_require_https_needs_trust_proxy(tmp_path):
+    s = Settings(admin_password="p", secret_key="x" * 40, mail_from="a@b.com", mail_backend="console",
+                 db_path=str(tmp_path / "x.db"), require_https=True)
+    with pytest.raises(RuntimeError, match="TRUST_PROXY"):
+        create_app(s, FakeBackend())
