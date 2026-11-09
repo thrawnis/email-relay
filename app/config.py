@@ -1,6 +1,7 @@
 """Configuration loaded from environment variables (see .env.example)."""
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field
 
@@ -61,20 +62,29 @@ class Settings:
 
     # Reverse proxy / transport security
     trust_proxy: bool = False        # read client IP + scheme from proxy headers (NPM, Cloudflare Tunnel)
+    trusted_proxies: list[str] = field(default_factory=list)  # IPs/CIDRs allowed to set those headers; empty = any
     require_https: bool = False      # reject requests that did not arrive over HTTPS at the proxy
     block_api_via_cloudflare: bool = True  # /api/* is LAN-only: refuse requests carrying Cloudflare headers
     smtp_ca_file: str = ""           # extra CA bundle for a self-signed SMTP server
 
-    # Hostname apps use to reach the relay (shown in connection details, used for TLS / EHLO)
+    # Hostname apps use for the HTTPS API (via NPM), and for SMTP submission (straight to the relay host)
     public_hostname: str = "email-relay"
+    submission_hostname: str = ""
+
+    # TLS for the relay's own listeners (HTTPS port and SMTP submission)
+    http_tls: bool = False               # serve the HTTP port over HTTPS (set by app/serve.py)
+    tls_cert: str = ""                   # PEM fullchain; empty = auto-generated self-signed cert in /data/tls
+    tls_key: str = ""
 
     # SMTP submission ingress (for apps that can only speak SMTP)
     submission_enabled: bool = False
     submission_bind: str = "0.0.0.0"
     submission_starttls_port: int = 587  # 0 = disabled
     submission_tls_port: int = 465       # 0 = disabled
-    submission_tls_cert: str = ""        # PEM fullchain; empty = auto-generated self-signed cert in /data/tls
-    submission_tls_key: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.submission_hostname:
+            self.submission_hostname = self.public_hostname
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -103,16 +113,19 @@ class Settings:
             max_recipients=_int("MAX_RECIPIENTS", 50),
             max_attachment_bytes=_int("MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024),
             trust_proxy=_bool("TRUST_PROXY", False),
+            trusted_proxies=_list("TRUSTED_PROXIES"),
             require_https=_bool("REQUIRE_HTTPS", False),
             block_api_via_cloudflare=_bool("BLOCK_API_VIA_CLOUDFLARE", True),
             smtp_ca_file=_env("SMTP_CA_FILE"),
             public_hostname=_env("PUBLIC_HOSTNAME", "email-relay"),
+            submission_hostname=_env("SUBMISSION_HOSTNAME") or _env("PUBLIC_HOSTNAME", "email-relay"),
+            http_tls=_bool("HTTP_TLS", True),
+            tls_cert=_env("TLS_CERT"),
+            tls_key=_env("TLS_KEY"),
             submission_enabled=_bool("SUBMISSION_ENABLED", True),
             submission_bind=_env("SUBMISSION_BIND_ADDRESS", "0.0.0.0"),
             submission_starttls_port=_int("SUBMISSION_STARTTLS_PORT", 587),
             submission_tls_port=_int("SUBMISSION_TLS_PORT", 465),
-            submission_tls_cert=_env("SUBMISSION_TLS_CERT"),
-            submission_tls_key=_env("SUBMISSION_TLS_KEY"),
         )
 
     def validate(self) -> list[str]:
@@ -125,13 +138,18 @@ class Settings:
             problems.append("MAIL_FROM is not set")
         if self.mail_backend == "smtp" and not self.smtp_host:
             problems.append("SMTP_HOST is not set (MAIL_BACKEND=smtp)")
-        if self.require_https and not self.trust_proxy:
-            problems.append("REQUIRE_HTTPS=true needs TRUST_PROXY=true (HTTPS is terminated at the proxy)")
+        if self.require_https and not (self.trust_proxy or self.http_tls):
+            problems.append("REQUIRE_HTTPS=true needs TRUST_PROXY=true or HTTP_TLS=true")
+        for p in self.trusted_proxies:
+            try:
+                ipaddress.ip_network(p, strict=False)
+            except ValueError:
+                problems.append(f"TRUSTED_PROXIES entry {p!r} is not an IP address or CIDR")
         if self.smtp_ca_file and not os.path.isfile(self.smtp_ca_file):
             problems.append(f"SMTP_CA_FILE {self.smtp_ca_file} does not exist")
-        if bool(self.submission_tls_cert) != bool(self.submission_tls_key):
-            problems.append("Set both SUBMISSION_TLS_CERT and SUBMISSION_TLS_KEY (or neither for a self-signed cert)")
-        for f in (self.submission_tls_cert, self.submission_tls_key):
+        if bool(self.tls_cert) != bool(self.tls_key):
+            problems.append("Set both TLS_CERT and TLS_KEY (or neither for a self-signed cert)")
+        for f in (self.tls_cert, self.tls_key):
             if f and not os.path.isfile(f):
                 problems.append(f"{f} does not exist")
         if self.submission_enabled and not (self.submission_starttls_port or self.submission_tls_port):
@@ -157,5 +175,9 @@ class Settings:
             "max_attachment_bytes": self.max_attachment_bytes,
             "log_retention_days": self.log_retention_days,
             "require_https": self.require_https,
+            "http_tls": self.http_tls,
+            "public_hostname": self.public_hostname,
+            "submission_hostname": self.submission_hostname,
+            "trusted_proxies": self.trusted_proxies,
             "block_api_via_cloudflare": self.block_api_via_cloudflare,
         }

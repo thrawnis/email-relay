@@ -105,8 +105,8 @@ function renderConnect(info, key, secret) {
     const ports = [smtp.starttls_port && `${smtp.starttls_port} — STARTTLS (recommended)`, smtp.tls_port && `${smtp.tls_port} — SSL/TLS (implicit)`].filter(Boolean);
     const cert = smtp.certificate || {};
     const certNote = cert.self_signed
-      ? `<div class="note">The relay is using a <strong>self-signed certificate</strong> for SMTP. Configure SUBMISSION_TLS_CERT/KEY
-         (e.g. NPM's Let's Encrypt cert for ${esc(info.smtp.host)}) so apps can verify it, or trust the relay's CA in the app.</div>`
+      ? `<div class="note">The relay is using a <strong>self-signed certificate</strong> for SMTP. Configure TLS_CERT/TLS_KEY
+         (e.g. a Let's Encrypt cert for ${esc(info.smtp.host)}) so apps can verify it, or trust the relay's CA in the app.</div>`
       : cert.error ? `<div class="note">Certificate problem: ${esc(cert.error)}</div>` : "";
     smtpHtml = `<dl>
         <dt>Host</dt><dd><code>${esc(smtp.host)}</code></dd>

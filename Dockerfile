@@ -23,7 +23,7 @@ VOLUME ["/data"]
 EXPOSE 8000 587 465
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"
+  CMD ["python", "-m", "app.healthcheck"]
 
-# Exactly one worker process: the delivery queue runs inside the app process.
-CMD ["uvicorn", "app.main:_default_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers"]
+# HTTPS on 8000 (unless HTTP_TLS=false), SMTP submission on 587/465. Single process by design.
+CMD ["python", "-m", "app.serve"]

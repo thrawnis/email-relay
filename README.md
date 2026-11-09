@@ -42,7 +42,7 @@ Edit `.env` and set at least:
 - `ADMIN_PASSWORD`
 - `SECRET_KEY` (generate it with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`)
 - `MAIL_FROM` and the `SMTP_*` settings for `notify@thetruesource.com`
-- `PROXY_NETWORK`: the Docker network Nginx Proxy Manager is on (see below)
+- `PUBLIC_HOSTNAME`, `SUBMISSION_HOSTNAME` and `TRUSTED_PROXIES` (see below)
 
 `.env` is git-ignored, so the real credentials stay on the server only.
 
@@ -54,65 +54,95 @@ Then build and start:
 
 To try it without sending real mail, set `MAIL_BACKEND=console`. Messages are then printed to `docker compose logs` instead of being sent.
 
-## HTTPS: Nginx Proxy Manager + Cloudflare Tunnel
+## HTTPS: Nginx Proxy Manager (separate server) + Cloudflare Tunnel
 
 ```
- homelab apps ──HTTPS──▶ Nginx Proxy Manager ──┐
- you (LAN)    ──HTTPS──▶ Nginx Proxy Manager ──┼──http (Docker network)──▶ email-relay:8000
- you (remote) ──HTTPS──▶ Cloudflare ─tunnel─▶ cloudflared ┘   (admin UI only; /api/* refused)
+ homelab apps ──HTTPS──▶ NPM server ──HTTPS (LAN)──┐
+ you (LAN)    ──HTTPS──▶ NPM server ──HTTPS (LAN)──┼──▶ relay host :8443 ─▶ email-relay
+ you (remote) ──▶ Cloudflare Access ─▶ tunnel ─▶ cloudflared ──HTTPS──┘   (admin UI only)
+ SMTP-only apps ──SMTP + STARTTLS/TLS──▶ relay host :587 / :465 (direct; NPM can't proxy SMTP)
 ```
 
-The relay publishes **no host port**. It is reachable only through the proxies on the shared Docker network, and it enforces the rules itself:
+Every hop is encrypted. The relay serves **HTTPS itself** on its LAN port (`HTTP_TLS=true`), so the hop from NPM to the
+relay is encrypted too, and there is no plain-HTTP port at all. The relay also enforces:
 
 | Setting | Effect |
 |---|---|
-| `REQUIRE_HTTPS=true` | Any request whose `X-Forwarded-Proto` isn't `https` gets a 403. Plain-HTTP send attempts are logged as rejected. Responses carry HSTS. `/healthz` is exempt for the container healthcheck. |
-| `BLOCK_API_VIA_CLOUDFLARE=true` | `/api/*` requests that carry Cloudflare headers (`CF-Connecting-IP` / `CF-Ray`) are refused and logged. The tunnel can only ever reach the admin UI, even if its ingress rules are too broad. |
-| `TRUST_PROXY=true` | Takes the client IP from `CF-Connecting-IP`, `X-Real-IP` or `X-Forwarded-For` and the scheme from `X-Forwarded-Proto`, so logs and login throttling see real addresses. |
+| `REQUIRE_HTTPS=true` | Any request whose `X-Forwarded-Proto` (from a trusted proxy) isn't `https` gets a 403. Plain-HTTP send attempts are logged as rejected. Responses carry HSTS. |
+| `TRUST_PROXY=true` + `TRUSTED_PROXIES` | The client IP (`CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For`) and scheme are taken from proxy headers **only** when the request comes from a listed IP. Set this to the NPM server's IP and the cloudflared host's IP. |
+| `BLOCK_API_VIA_CLOUDFLARE=true` | `/api/*` requests carrying Cloudflare headers are refused and logged, so the tunnel can only ever reach the admin UI. |
 | `COOKIE_SECURE=true` | The admin session cookie is only ever sent over HTTPS. |
 
-### 1. Docker network
+### 1. Relay host: ports and firewall
 
-Find the network NPM is on and set it as `PROXY_NETWORK` in `.env`:
+`docker-compose.yml` publishes three ports on `RELAY_HOST_BIND`. Set that to this host's LAN IP rather than `0.0.0.0`.
+
+| Port | What | Who should reach it |
+|---|---|---|
+| `8443` (`RELAY_HTTPS_PORT`) | HTTPS: admin UI + API | only the NPM server and the cloudflared host |
+| `587` / `465` | SMTP submission | homelab hosts that run SMTP-only apps |
+
+For example, with `ufw` and NPM at `192.168.1.10`:
 
 ```bash
-docker network ls
+sudo ufw allow from 192.168.1.10 to any port 8443 proto tcp
 ```
 
 ```bash
-docker inspect <npm-container> --format '{{json .NetworkSettings.Networks}}'
+sudo ufw allow from 192.168.1.0/24 to any port 587,465 proto tcp
 ```
 
-If NPM runs on a different machine, there's no shared network. In that case add `ports: ["<lan-ip>:8025:8000"]` to the
-service and firewall that port so only the NPM host can reach it.
+Docker publishes ports by writing its own iptables rules, which bypass ufw's normal rules. Either bind `RELAY_HOST_BIND` to the
+LAN IP and rely on your network's segmentation, or add the restrictions to the `DOCKER-USER` chain.
 
-### 2. Nginx Proxy Manager (internal traffic)
+### 2. Nginx Proxy Manager (on the other server)
 
 Add a Proxy Host:
-- **Domain:** `relay.thetruesource.com`, or a name like `relay.home.thetruesource.com`. Point it at NPM in your local DNS (Pi-hole, AdGuard, router) only.
-- **Scheme / Forward host / Port:** `http` / `email-relay` / `8000`.
-- **SSL tab:** request a Let's Encrypt certificate **using a DNS challenge** with Cloudflare as the provider and a Cloudflare API token with `Zone:DNS:Edit`. Enable **Force SSL**, **HTTP/2** and **HSTS**.
+- **Domain:** `relay.thetruesource.com` (`PUBLIC_HOSTNAME`). Point it at the NPM server in your local DNS only.
+- **Scheme / Forward host / Port:** **`https`** / the relay host's LAN IP / `8443`.
+- **SSL tab:** request a Let's Encrypt certificate **using a DNS challenge** with Cloudflare as the provider (a Cloudflare API token with `Zone:DNS:Edit`). Enable **Force SSL**, **HTTP/2** and **HSTS**.
 
-The DNS challenge gives you a real, publicly trusted certificate for a name that only resolves on your LAN. Nothing needs
-to be exposed to the internet, and no app needs a custom CA or `verify=False`. NPM already sends `X-Real-IP` and
-`X-Forwarded-Proto`, so nothing is needed in the Advanced tab.
+By default NPM doesn't verify the upstream certificate, so the relay's auto-generated self-signed certificate is enough
+for this hop. Apps only ever see NPM's Let's Encrypt certificate, so no app needs a custom CA or `verify=False`.
 
-Apps then send to `https://relay.thetruesource.com/api/send`.
+Then set `TRUSTED_PROXIES` in the relay's `.env` to the NPM server's IP (plus cloudflared's, see below).
 
 ### 3. Cloudflare Tunnel (remote admin access)
 
-- Add a public hostname, for example `relay-admin.thetruesource.com`, with service `http://email-relay:8000`. This needs cloudflared on the same Docker network; otherwise point it at NPM.
-- **Put a Cloudflare Access application in front of it** (Zero Trust → Access → Applications). Use a policy that allows only your email, with one-time PIN or SSO. The admin password then becomes a second layer instead of the only one.
-- The relay refuses `/api/*` on this path anyway. If you want the tunnel to drop those requests before they reach the relay, add an ingress rule that only matches `^/(admin|static)`.
+- Add a public hostname, for example `relay-admin.thetruesource.com`. Point it at **NPM** (`https://<npm-ip>` with the
+  origin server name `relay.thetruesource.com`), or directly at `https://<relay-host>:8443` with *No TLS Verify* enabled.
+  If it points straight at the relay, add the cloudflared host's IP to `TRUSTED_PROXIES`.
+- **Put a Cloudflare Access application in front of it**: Zero Trust → Access → Applications, with a policy that allows only your email.
+- The relay refuses `/api/*` through the tunnel regardless.
 
-### Self-signed certificates
+### 4. SMTP hostname and a certificate apps can verify
 
-If you use a self-signed or private-CA certificate in NPM instead of Let's Encrypt, make each app trust the CA. Don't turn
-off verification. Use `REQUESTS_CA_BUNDLE=/path/ca.crt` (Python requests), `SSL_CERT_FILE` (httpx),
-`NODE_EXTRA_CA_CERTS` (Node), `curl --cacert`, or install the CA host-wide with `update-ca-certificates`.
+NPM only proxies HTTP, so SMTP-only apps connect straight to the relay host. Give it its own name, for example
+`SUBMISSION_HOSTNAME=smtp-relay.thetruesource.com`, and in local DNS point that name at the **relay host's** IP.
 
-The relay's own outbound SMTP connection always verifies certificates. If the SMTP server uses a private CA, put the CA
-certificate in `./data/` and set `SMTP_CA_FILE=/data/<name>.crt`. Don't use `SMTP_SECURITY=none`.
+By default the relay uses a self-signed certificate covering both hostnames, stored in `./data/tls/`. The Overview page flags it.
+It works, but each SMTP app would then have to trust it or skip verification. For a trusted certificate:
+
+1. On the NPM server, issue a Let's Encrypt certificate for `smtp-relay.thetruesource.com` with the DNS challenge
+   (*SSL Certificates → Add → Let's Encrypt*). It doesn't need a proxy host.
+2. Copy its `fullchain.pem` and `privkey.pem` to the relay host as `./data/certs/`, and keep them in sync with a daily cron job on the relay host:
+   ```bash
+   rsync -aL npm-server:/path/to/npm/letsencrypt/live/npm-N/ /path/to/email-relay/data/certs/ && docker restart email-relay
+   ```
+   `npm-N` is the certificate's id in NPM. `-L` copies the real files rather than the symlinks.
+3. In `.env`, set `TLS_CERT=/data/certs/fullchain.pem` and `TLS_KEY=/data/certs/privkey.pem`, then run `./rebuild.sh --force`.
+
+SMTP picks up a changed certificate within 5 minutes without a restart. The HTTPS port needs a restart, which is why the
+cron job above runs `docker restart`; only NPM sees that certificate, so this is optional.
+
+### Self-signed certificates for apps
+
+If an app talks to a self-signed endpoint, make it trust the CA rather than turning verification off. Use
+`REQUESTS_CA_BUNDLE=/path/ca.crt` (Python requests), `SSL_CERT_FILE` (httpx), `NODE_EXTRA_CA_CERTS` (Node),
+`curl --cacert`, or install the CA host-wide with `update-ca-certificates`.
+
+The relay's own outbound SMTP connection always verifies certificates. If the upstream SMTP server uses a private CA,
+put the CA certificate in `./data/` and set `SMTP_CA_FILE=/data/<name>.crt`. Don't use `SMTP_SECURITY=none`.
 
 ### `rebuild.sh`
 
@@ -203,7 +233,7 @@ Use the details from the key's **Connect** dialog. In the app's mail settings, e
 
 | Setting | Value |
 |---|---|
-| Host | `PUBLIC_HOSTNAME` (e.g. `relay.thetruesource.com`) |
+| Host | `SUBMISSION_HOSTNAME` (e.g. `smtp-relay.thetruesource.com`) |
 | Port / security | `587` + STARTTLS (preferred) or `465` + SSL/TLS |
 | Username | the app's name (informational) |
 | Password | the app's relay key (`erk_…`) |
@@ -215,30 +245,14 @@ How it behaves:
 - If the `From` header isn't allowed, the server replies `553`. If the app is over its rate limit, it replies `451`, a temporary error, so the app retries later.
 - Every attempt, including failed logins, is logged with **Via = smtp**.
 
-### A certificate apps can verify
+### Certificate and reachability
 
-With no settings, the relay generates a **self-signed** certificate in `./data/tls/`, and the Overview page flags it.
-To use a trusted certificate, reuse NPM's Let's Encrypt certificate for `PUBLIC_HOSTNAME`:
+Apps connect to `SUBMISSION_HOSTNAME`, which resolves to the relay host. See
+[step 4 above](#4-smtp-hostname-and-a-certificate-apps-can-verify) for the DNS record and the trusted certificate.
 
-1. In `.env`, set `NPM_LETSENCRYPT_DIR` to NPM's `letsencrypt` folder on the host. That's the folder NPM mounts at `/etc/letsencrypt`.
-2. Find the `npm-N` folder for the certificate. Its number is the certificate id shown in NPM's *SSL Certificates* list. You can also run `ls <dir>/live`.
-3. Set:
-   ```
-   SUBMISSION_TLS_CERT=/npm-letsencrypt/live/npm-N/fullchain.pem
-   SUBMISSION_TLS_KEY=/npm-letsencrypt/live/npm-N/privkey.pem
-   ```
-4. Run `./rebuild.sh --force`.
-
-The relay checks the certificate files every 5 minutes, so NPM's renewals are picked up without a restart.
-
-### Reaching the ports
-
-The SMTP ports are published on the host, unlike HTTP. Apps connect to `PUBLIC_HOSTNAME:587`, so in your local DNS
-`PUBLIC_HOSTNAME` must resolve to the machine running the relay. That's usually the same host as NPM.
-
-To keep the ports off other interfaces, set `SUBMISSION_HOST_BIND` to the host's LAN IP. Don't forward 587/465 on your
-router or through Cloudflare Tunnel: SMTP submission is meant for the homelab only. If those ports are already in use
-on the host, change `SUBMISSION_STARTTLS_PORT` / `SUBMISSION_TLS_PORT`. To turn submission off, set `SUBMISSION_ENABLED=false`.
+Don't forward 587/465 on your router or through Cloudflare Tunnel: SMTP submission is meant for the homelab only. If those ports
+are already in use on the relay host, change `SUBMISSION_STARTTLS_PORT` / `SUBMISSION_TLS_PORT`. To turn submission off,
+set `SUBMISSION_ENABLED=false`.
 
 ## Adding a provider API backend
 
@@ -273,6 +287,8 @@ app/
   security.py    key generation/hashing, sender matching, login throttling
   service.py     admission rules shared by the HTTP API and SMTP (limits, senders, logging)
   submission.py  SMTP submission server (aiosmtpd): STARTTLS/implicit TLS, AUTH with app keys
+  tls.py         certificate loading / self-signed generation (HTTPS port + SMTP)
+  serve.py       container entrypoint (uvicorn with TLS)
   config.py      env-var settings
   backends/      smtp.py, console.py, base.py (interface + MIME builder)
   static/        admin UI (vanilla JS)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -80,8 +81,22 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
     app.state.db, app.state.worker, app.state.settings, app.state.backend = db, worker, settings, backend
     app.state.relay, app.state.submission = relay, submission
 
+    proxy_nets = [ipaddress.ip_network(p, strict=False) for p in settings.trusted_proxies]
+
+    def from_trusted_proxy(request: Request) -> bool:
+        """Proxy headers are only believed when TRUST_PROXY is on and the peer is a listed proxy (if any are listed)."""
+        if not settings.trust_proxy:
+            return False
+        if not proxy_nets:
+            return True
+        try:
+            peer = ipaddress.ip_address(request.client.host if request.client else "")
+        except ValueError:
+            return False
+        return any(peer in n for n in proxy_nets)
+
     def client_ip(request: Request) -> str | None:
-        if settings.trust_proxy:
+        if from_trusted_proxy(request):
             h = request.headers
             # Cloudflare Tunnel sets CF-Connecting-IP; Nginx Proxy Manager sets X-Real-IP to the peer address.
             for name in ("cf-connecting-ip", "x-real-ip"):
@@ -95,7 +110,7 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
         return "cf-connecting-ip" in request.headers or "cf-ray" in request.headers
 
     def is_https(request: Request) -> bool:
-        if settings.trust_proxy and request.headers.get("x-forwarded-proto"):
+        if from_trusted_proxy(request) and request.headers.get("x-forwarded-proto"):
             return request.headers["x-forwarded-proto"].split(",")[0].strip().lower() == "https"
         return request.url.scheme == "https"
 
@@ -249,7 +264,7 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
         return {
             "api": {"send_url": f"https://{host}/api/send", "status_url": f"https://{host}/api/messages/{{id}}",
                     "docs_url": f"https://{host}/api/docs"},
-            "smtp": submission.status() | {"host": host},
+            "smtp": submission.status() | {"host": settings.submission_hostname},
             "default_from": settings.mail_from,
             "default_from_name": settings.mail_from_name,
             "allowed_from": settings.mail_allowed_from,

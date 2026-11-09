@@ -292,3 +292,26 @@ def test_require_https_needs_trust_proxy(tmp_path):
                  db_path=str(tmp_path / "x.db"), require_https=True)
     with pytest.raises(RuntimeError, match="TRUST_PROXY"):
         create_app(s, FakeBackend())
+
+
+def test_trusted_proxies_only(tmp_path):
+    # TestClient's peer address is "testclient", which is not in TRUSTED_PROXIES -> headers ignored
+    s = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "tp.db"),
+                 mail_from="notify@thetruesource.com", mail_backend="console", trust_proxy=True,
+                 require_https=True, trusted_proxies=["192.168.1.10"])
+    with TestClient(create_app(s, FakeBackend())) as client:
+        # spoofed X-Forwarded-Proto from an untrusted peer does not count as HTTPS
+        assert client.get("/admin", headers={"X-Forwarded-Proto": "https"}).status_code == 403
+    with TestClient(create_app(s, FakeBackend()), base_url="https://relay") as client:
+        assert client.get("/admin").status_code == 200  # real TLS to the relay itself is fine
+
+
+def test_self_signed_covers_both_hostnames(tmp_path):
+    from app.tls import describe_cert, resolve_tls_files
+    s = Settings(db_path=str(tmp_path / "x.db"), public_hostname="relay.example.com",
+                 submission_hostname="smtp.example.com")
+    cert, _ = resolve_tls_files(s)
+    assert {"relay.example.com", "smtp.example.com"} <= set(describe_cert(cert)["names"])
+    s.submission_hostname = "smtp2.example.com"  # hostname change -> regenerated
+    cert, _ = resolve_tls_files(s)
+    assert "smtp2.example.com" in describe_cert(cert)["names"]

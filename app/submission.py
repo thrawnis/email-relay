@@ -12,7 +12,6 @@ delivery with the original MIME preserved (inline images, headers, etc).
 from __future__ import annotations
 
 import base64
-import datetime as dt
 import logging
 import os
 import ssl
@@ -26,56 +25,9 @@ from aiosmtpd.smtp import SMTP, AuthResult, LoginPassword
 
 from .config import Settings
 from .service import Relay
+from .tls import describe_cert, resolve_tls_files
 
 log = logging.getLogger("relay.smtp")
-
-
-# --------------------------------------------------------------------- TLS
-def ensure_self_signed(directory: str, hostname: str) -> tuple[str, str]:
-    """Create (once) a self-signed cert so submission works before a real cert is configured."""
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import NameOID
-
-    cert_path, key_path = os.path.join(directory, "selfsigned.crt"), os.path.join(directory, "selfsigned.key")
-    if os.path.exists(cert_path) and os.path.exists(key_path):
-        return cert_path, key_path
-    os.makedirs(directory, exist_ok=True)
-    key = ec.generate_private_key(ec.SECP256R1())
-    names = list(dict.fromkeys([hostname, "email-relay", "localhost"]))
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)])
-    now = dt.datetime.now(dt.timezone.utc)
-    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now - dt.timedelta(days=1)).not_valid_after(now + dt.timedelta(days=3650))
-            .add_extension(x509.SubjectAlternativeName([x509.DNSName(n) for n in names]), critical=False)
-            .sign(key, hashes.SHA256()))
-    with open(key_path, "wb") as f:
-        f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                  serialization.NoEncryption()))
-    os.chmod(key_path, 0o600)
-    with open(cert_path, "wb") as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
-    log.warning("Generated self-signed submission certificate for %s at %s", hostname, cert_path)
-    return cert_path, key_path
-
-
-def describe_cert(path: str) -> dict:
-    from cryptography import x509
-    try:
-        with open(path, "rb") as f:
-            cert = x509.load_pem_x509_certificate(f.read())
-        try:
-            sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
-                x509.DNSName)
-        except x509.ExtensionNotFound:
-            sans = []
-        return {"subject": cert.subject.rfc4514_string(), "issuer": cert.issuer.rfc4514_string(),
-                "names": sans, "not_after": cert.not_valid_after_utc.timestamp(),
-                "self_signed": cert.issuer == cert.subject}
-    except Exception as e:  # pragma: no cover - surfaced in the admin UI
-        return {"error": f"{type(e).__name__}: {e}"}
 
 
 # ----------------------------------------------------------------- handler
@@ -187,18 +139,14 @@ class SubmissionServer:
         s = self.settings
         if not s.submission_enabled:
             return
-        if s.submission_tls_cert:
-            self.cert_path, self.key_path = s.submission_tls_cert, s.submission_tls_key
-        else:
-            self.cert_path, self.key_path = ensure_self_signed(
-                os.path.join(os.path.dirname(os.path.abspath(s.db_path)), "tls"), s.public_hostname)
+        self.cert_path, self.key_path = resolve_tls_files(s)
         self.ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         self.ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         self._load_cert()
 
         handler = SubmissionHandler(self.relay)
         common = dict(
-            handler=handler, hostname=s.submission_bind, server_hostname=s.public_hostname,
+            handler=handler, hostname=s.submission_bind, server_hostname=s.submission_hostname,
             ident="email-relay", authenticator=handler.authenticate, auth_required=True, auth_require_tls=True,
             data_size_limit=int(s.max_attachment_bytes * 1.4) + 2 * 1024 * 1024,
         )

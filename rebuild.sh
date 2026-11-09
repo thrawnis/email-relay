@@ -40,13 +40,6 @@ if ! COMPOSE_ERR="$(docker compose config -q 2>&1)"; then
   echo "$COMPOSE_ERR"
   exit 1
 fi
-PROXY_NETWORK_NAME="$(grep -E '^PROXY_NETWORK=' .env | tail -1 | cut -d= -f2- | tr -d '"'"'"' ')"
-if [[ -n "$PROXY_NETWORK_NAME" ]] && ! docker network inspect "$PROXY_NETWORK_NAME" >/dev/null 2>&1; then
-  log "ERROR: Docker network '$PROXY_NETWORK_NAME' (PROXY_NETWORK) does not exist — nothing was built or stopped."
-  log "Available networks:"
-  docker network ls --format '  {{.Name}}'
-  exit 1
-fi
 
 # 3. Stale-container detection: compare the running container's baked-in git_sha label to HEAD.
 RUNNING_SHA=""
