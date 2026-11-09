@@ -27,6 +27,27 @@ git pull --ff-only origin "$BRANCH"
 AFTER="$(git rev-parse HEAD)"
 log "HEAD before=${BEFORE:0:12} after=${AFTER:0:12}"
 
+# Preflight: fail before building/stopping anything if the config can't work.
+# Settings present in .env.example but missing from .env (new settings added by an update).
+MISSING="$(comm -23 \
+  <(grep -oE '^[A-Z_][A-Z0-9_]*=' .env.example | sort -u) \
+  <(grep -oE '^[A-Z_][A-Z0-9_]*=' .env | sort -u) | tr -d '=' | tr '\n' ' ')"
+if [[ -n "$MISSING" ]]; then
+  log "WARNING: .env is missing settings from .env.example (defaults will apply): $MISSING"
+fi
+if ! COMPOSE_ERR="$(docker compose config -q 2>&1)"; then
+  log "ERROR: docker-compose config is invalid — nothing was built or stopped:"
+  echo "$COMPOSE_ERR"
+  exit 1
+fi
+PROXY_NETWORK_NAME="$(grep -E '^PROXY_NETWORK=' .env | tail -1 | cut -d= -f2- | tr -d '"'"'"' ')"
+if [[ -n "$PROXY_NETWORK_NAME" ]] && ! docker network inspect "$PROXY_NETWORK_NAME" >/dev/null 2>&1; then
+  log "ERROR: Docker network '$PROXY_NETWORK_NAME' (PROXY_NETWORK) does not exist — nothing was built or stopped."
+  log "Available networks:"
+  docker network ls --format '  {{.Name}}'
+  exit 1
+fi
+
 # 3. Stale-container detection: compare the running container's baked-in git_sha label to HEAD.
 RUNNING_SHA=""
 if docker inspect "$CONTAINER" >/dev/null 2>&1; then
