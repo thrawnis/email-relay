@@ -3,13 +3,14 @@
 A small, self-hosted outbound email relay for internal apps — a lightweight alternative to SendGrid/Mailgun.
 
 The relay holds the **one real set of sending credentials** (for `notify@thetruesource.com`) and gives each app
-its **own virtual API key**. Apps call `POST /api/send` with their key; the relay queues the message,
+its **own virtual key**. Apps either call `POST /api/send` with their key, or, if they only support SMTP,
+log in to the relay's own SMTP submission port with the key as the password. The relay queues the message,
 delivers it through the real backend with retry/backoff, and logs every attempt.
 
 ```
- app A ──key A──┐
- app B ──key B──┼──▶  Email Relay  ──(real SMTP creds)──▶  mail provider ──▶ recipients
- app C ──key C──┘     ├─ per-key quotas / allowed senders
+ app A ──HTTPS API, key A──┐
+ app B ──SMTP 587, key B───┼──▶  Email Relay  ──(real SMTP creds)──▶  mail provider ──▶ recipients
+ app C ──SMTP 465, key C───┘     ├─ per-key quotas / allowed senders
                       ├─ SQLite: keys (hashed) + send log + events
                       └─ admin UI (password-gated)
 ```
@@ -18,6 +19,8 @@ delivers it through the real backend with retry/backoff, and logs every attempt.
 
 - **Per-app API keys**: create, rename, edit and revoke them in the admin UI. A key is shown in full **once**, when it is created. Only its SHA-256 hash is stored.
 - **`POST /api/send`** accepts to/cc/bcc, subject, text and/or HTML, reply-to and base64 attachments.
+- **SMTP submission** for apps that only have "SMTP settings" (Gitea, Grafana, Vaultwarden, …): STARTTLS on 587 and/or implicit TLS on 465, with AUTH required. The username is the app name; the password is the app's key. The original MIME is forwarded unchanged (minus any `Bcc` header), and the same limits, sender rules and logging apply.
+- **Connection details per app**: when a key is created, the dialog shows everything the app needs: SMTP host, ports, security, username and password, the HTTP endpoint, ready-to-paste curl and Python examples, and that app's limits. A **Connect** button on each key reopens this later, without the key. The relay's own upstream SMTP credentials are never shown.
 - **Persistent queue**: each request is saved to SQLite before the API returns `202`, and a background worker delivers it. Messages survive restarts, and anything that was in flight during a crash is re-queued.
 - **Retry with backoff** on transient failures: network errors, SMTP 4xx, auth problems. The default schedule is 30s, 2m, 10m, 30m, 1h, with up to 5 attempts. Permanent failures (SMTP 5xx) are not retried. An admin can re-queue a failed message.
 - **Every attempt is logged**, including rejected ones: bad or revoked key, validation error, quota exceeded, sender not allowed. Each log entry records the timestamp, app, recipients, subject, status, attempts, error, Message-ID and client IP, plus a per-message event timeline.
@@ -194,6 +197,49 @@ Every non-202 response is also logged as `rejected`.
 
 Interactive API docs are at `/api/docs`.
 
+## Sending email over SMTP (SMTP-only apps)
+
+Use the details from the key's **Connect** dialog. In the app's mail settings, enter:
+
+| Setting | Value |
+|---|---|
+| Host | `PUBLIC_HOSTNAME` (e.g. `relay.thetruesource.com`) |
+| Port / security | `587` + STARTTLS (preferred) or `465` + SSL/TLS |
+| Username | the app's name (informational) |
+| Password | the app's relay key (`erk_…`) |
+| From | `notify@thetruesource.com`, or another address the key is allowed to use |
+
+How it behaves:
+- TLS is mandatory. AUTH isn't offered before STARTTLS, and MAIL is refused before AUTH.
+- A message is accepted with `250 … queued as <id>` and then delivered through the same queue as the API.
+- If the `From` header isn't allowed, the server replies `553`. If the app is over its rate limit, it replies `451`, a temporary error, so the app retries later.
+- Every attempt, including failed logins, is logged with **Via = smtp**.
+
+### A certificate apps can verify
+
+With no settings, the relay generates a **self-signed** certificate in `./data/tls/`, and the Overview page flags it.
+To use a trusted certificate, reuse NPM's Let's Encrypt certificate for `PUBLIC_HOSTNAME`:
+
+1. In `.env`, set `NPM_LETSENCRYPT_DIR` to NPM's `letsencrypt` folder on the host. That's the folder NPM mounts at `/etc/letsencrypt`.
+2. Find the `npm-N` folder for the certificate. Its number is the certificate id shown in NPM's *SSL Certificates* list. You can also run `ls <dir>/live`.
+3. Set:
+   ```
+   SUBMISSION_TLS_CERT=/npm-letsencrypt/live/npm-N/fullchain.pem
+   SUBMISSION_TLS_KEY=/npm-letsencrypt/live/npm-N/privkey.pem
+   ```
+4. Run `./rebuild.sh --force`.
+
+The relay checks the certificate files every 5 minutes, so NPM's renewals are picked up without a restart.
+
+### Reaching the ports
+
+The SMTP ports are published on the host, unlike HTTP. Apps connect to `PUBLIC_HOSTNAME:587`, so in your local DNS
+`PUBLIC_HOSTNAME` must resolve to the machine running the relay. That's usually the same host as NPM.
+
+To keep the ports off other interfaces, set `SUBMISSION_HOST_BIND` to the host's LAN IP. Don't forward 587/465 on your
+router or through Cloudflare Tunnel: SMTP submission is meant for the homelab only. If those ports are already in use
+on the host, change `SUBMISSION_STARTTLS_PORT` / `SUBMISSION_TLS_PORT`. To turn submission off, set `SUBMISSION_ENABLED=false`.
+
 ## Adding a provider API backend
 
 `app/backends/base.py` defines the interface. To add one (for example Postmark, Resend or SES):
@@ -225,6 +271,8 @@ app/
   db.py          SQLite schema + queries
   schemas.py     request validation
   security.py    key generation/hashing, sender matching, login throttling
+  service.py     admission rules shared by the HTTP API and SMTP (limits, senders, logging)
+  submission.py  SMTP submission server (aiosmtpd): STARTTLS/implicit TLS, AUTH with app keys
   config.py      env-var settings
   backends/      smtp.py, console.py, base.py (interface + MIME builder)
   static/        admin UI (vanilla JS)

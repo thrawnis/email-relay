@@ -65,6 +65,17 @@ class Settings:
     block_api_via_cloudflare: bool = True  # /api/* is LAN-only: refuse requests carrying Cloudflare headers
     smtp_ca_file: str = ""           # extra CA bundle for a self-signed SMTP server
 
+    # Hostname apps use to reach the relay (shown in connection details, used for TLS / EHLO)
+    public_hostname: str = "email-relay"
+
+    # SMTP submission ingress (for apps that can only speak SMTP)
+    submission_enabled: bool = False
+    submission_bind: str = "0.0.0.0"
+    submission_starttls_port: int = 587  # 0 = disabled
+    submission_tls_port: int = 465       # 0 = disabled
+    submission_tls_cert: str = ""        # PEM fullchain; empty = auto-generated self-signed cert in /data/tls
+    submission_tls_key: str = ""
+
     @classmethod
     def from_env(cls) -> "Settings":
         mail_from = _env("MAIL_FROM")
@@ -95,6 +106,13 @@ class Settings:
             require_https=_bool("REQUIRE_HTTPS", False),
             block_api_via_cloudflare=_bool("BLOCK_API_VIA_CLOUDFLARE", True),
             smtp_ca_file=_env("SMTP_CA_FILE"),
+            public_hostname=_env("PUBLIC_HOSTNAME", "email-relay"),
+            submission_enabled=_bool("SUBMISSION_ENABLED", True),
+            submission_bind=_env("SUBMISSION_BIND_ADDRESS", "0.0.0.0"),
+            submission_starttls_port=_int("SUBMISSION_STARTTLS_PORT", 587),
+            submission_tls_port=_int("SUBMISSION_TLS_PORT", 465),
+            submission_tls_cert=_env("SUBMISSION_TLS_CERT"),
+            submission_tls_key=_env("SUBMISSION_TLS_KEY"),
         )
 
     def validate(self) -> list[str]:
@@ -111,6 +129,13 @@ class Settings:
             problems.append("REQUIRE_HTTPS=true needs TRUST_PROXY=true (HTTPS is terminated at the proxy)")
         if self.smtp_ca_file and not os.path.isfile(self.smtp_ca_file):
             problems.append(f"SMTP_CA_FILE {self.smtp_ca_file} does not exist")
+        if bool(self.submission_tls_cert) != bool(self.submission_tls_key):
+            problems.append("Set both SUBMISSION_TLS_CERT and SUBMISSION_TLS_KEY (or neither for a self-signed cert)")
+        for f in (self.submission_tls_cert, self.submission_tls_key):
+            if f and not os.path.isfile(f):
+                problems.append(f"{f} does not exist")
+        if self.submission_enabled and not (self.submission_starttls_port or self.submission_tls_port):
+            problems.append("SUBMISSION_ENABLED=true but both submission ports are 0")
         if self.smtp_security not in ("starttls", "ssl", "none"):
             problems.append("SMTP_SECURITY must be starttls, ssl or none")
         return problems

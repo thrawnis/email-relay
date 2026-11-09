@@ -5,7 +5,7 @@ import smtplib
 import socket
 import ssl
 
-from .base import Backend, PermanentError, SendResult, TransientError, build_mime, envelope_recipients
+from .base import Backend, PermanentError, SendResult, TransientError, prepare
 
 
 class SMTPBackend(Backend):
@@ -37,12 +37,14 @@ class SMTPBackend(Backend):
         return conn
 
     def send(self, payload: dict, from_addr: str, from_name: str | None) -> SendResult:
-        msg = build_mime(payload, from_addr, from_name)
-        rcpts = envelope_recipients(payload)
+        msg, rcpts, message_id = prepare(payload, from_addr, from_name)
         try:
             conn = self._connect()
             try:
-                refused = conn.send_message(msg, from_addr=from_addr, to_addrs=rcpts)
+                if isinstance(msg, bytes):
+                    refused = conn.sendmail(from_addr, rcpts, msg)
+                else:
+                    refused = conn.send_message(msg, from_addr=from_addr, to_addrs=rcpts)
             finally:
                 try:
                     conn.quit()
@@ -69,7 +71,7 @@ class SMTPBackend(Backend):
         if refused:
             detail = "Some recipients refused: " + "; ".join(
                 f"{r}: {c} {_decode(m)}" for r, (c, m) in refused.items())
-        return SendResult(provider_id=msg["Message-ID"], detail=detail)
+        return SendResult(provider_id=message_id, detail=detail)
 
 
 def _decode(v) -> str:

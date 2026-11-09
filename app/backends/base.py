@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from email import policy
 from email.message import EmailMessage
+from email.parser import BytesParser
 from email.utils import formataddr, make_msgid
 
 
@@ -70,6 +72,20 @@ def build_mime(payload: dict, from_addr: str, from_name: str | None) -> EmailMes
         msg.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream",
                            filename=att["filename"])
     return msg
+
+
+def prepare(payload: dict, from_addr: str, from_name: str | None) -> tuple[bytes | EmailMessage, list[str], str | None]:
+    """Return (message, envelope recipients, Message-ID).
+
+    Payloads from the HTTP API are built into MIME here; payloads from SMTP submission
+    carry the app's original message as ``raw`` and are forwarded byte-for-byte.
+    """
+    if payload.get("raw"):
+        raw = base64.b64decode(payload["raw"])
+        mid = BytesParser(policy=policy.SMTP).parsebytes(raw, headersonly=True).get("Message-ID")
+        return raw, list(payload["envelope_to"]), str(mid) if mid else None
+    msg = build_mime(payload, from_addr, from_name)
+    return msg, envelope_recipients(payload), msg["Message-ID"]
 
 
 def envelope_recipients(payload: dict) -> list[str]:

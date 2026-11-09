@@ -65,6 +65,12 @@ async function loadOverview() {
     ["Backend", cfg.backend], ["Default from", cfg.mail_from_name ? `${cfg.mail_from_name} <${cfg.mail_from}>` : cfg.mail_from],
     ["Allowed from", cfg.mail_allowed_from.join(", ")], ["Max attempts", cfg.max_attempts],
     ["Retry delays (s)", cfg.retry_schedule_seconds.join(", ")], ["Max recipients", cfg.max_recipients],
+    ["SMTP submission", cfg.submission.enabled
+      ? `${cfg.submission.running ? "running" : "NOT running"} — ports ${[cfg.submission.starttls_port, cfg.submission.tls_port].filter(Boolean).join(", ")}`
+      : "disabled"],
+    ["Submission cert", !cfg.submission.certificate ? "—" : cfg.submission.certificate.error
+      ? cfg.submission.certificate.error
+      : `${cfg.submission.certificate.self_signed ? "SELF-SIGNED" : cfg.submission.certificate.issuer}; ${(cfg.submission.certificate.names || []).join(", ")}; expires ${new Date(cfg.submission.certificate.not_after * 1000).toLocaleDateString()}`],
     ["Max attachments", `${(cfg.max_attachment_bytes / 1048576).toFixed(1)} MB`], ["Log retention", cfg.log_retention_days > 0 ? `${cfg.log_retention_days} days` : "unlimited"],
   ];
   $("#config").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
@@ -78,6 +84,78 @@ $("#test-form").addEventListener("submit", async (e) => {
     setTimeout(loadOverview, 2000);
   } catch (err) { $("#test-result").textContent = err.message; }
 });
+
+// ---------------------------------------------------------------- connection details
+let connectInfo = null;
+async function getConnectInfo() { return (connectInfo ??= await api("/admin/api/connect-info")); }
+
+function codeBox(text) {
+  return `<div class="codebox"><pre>${esc(text)}</pre><button class="secondary small" data-copy="${esc(text)}">Copy</button></div>`;
+}
+
+function renderConnect(info, key, secret) {
+  const pw = secret || "<the key shown when this app was created>";
+  const allowed = key.allowed_from?.length ? key.allowed_from : info.allowed_from;
+  const fromList = allowed.join(", ");
+  const limits = [key.rate_per_minute && `${key.rate_per_minute} per minute`, key.rate_per_day && `${key.rate_per_day} per 24h`]
+    .filter(Boolean).join(", ") || "none";
+  const smtp = info.smtp;
+  let smtpHtml = `<p class="muted">SMTP submission is disabled (SUBMISSION_ENABLED=false).</p>`;
+  if (smtp.enabled) {
+    const ports = [smtp.starttls_port && `${smtp.starttls_port} — STARTTLS (recommended)`, smtp.tls_port && `${smtp.tls_port} — SSL/TLS (implicit)`].filter(Boolean);
+    const cert = smtp.certificate || {};
+    const certNote = cert.self_signed
+      ? `<div class="note">The relay is using a <strong>self-signed certificate</strong> for SMTP. Configure SUBMISSION_TLS_CERT/KEY
+         (e.g. NPM's Let's Encrypt cert for ${esc(info.smtp.host)}) so apps can verify it, or trust the relay's CA in the app.</div>`
+      : cert.error ? `<div class="note">Certificate problem: ${esc(cert.error)}</div>` : "";
+    smtpHtml = `<dl>
+        <dt>Host</dt><dd><code>${esc(smtp.host)}</code></dd>
+        <dt>Port / security</dt><dd>${ports.map(esc).join("<br>")}</dd>
+        <dt>Authentication</dt><dd>Required — PLAIN or LOGIN</dd>
+        <dt>Username</dt><dd><code>${esc(key.name)}</code> <span class="muted">(informational; the password identifies the app)</span></dd>
+        <dt>Password</dt><dd><code>${esc(pw)}</code></dd>
+        <dt>From address</dt><dd>${esc(fromList)}</dd>
+      </dl>${certNote}`;
+  }
+  const curl = `curl -X POST ${info.api.send_url} \\
+  -H "Authorization: Bearer ${pw}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"to": ["someone@example.com"], "subject": "Hello", "text": "Plain body", "html": "<p>HTML body</p>"}'`;
+  const py = `import requests
+
+requests.post(
+    "${info.api.send_url}",
+    headers={"Authorization": "Bearer ${pw}"},
+    json={"to": ["someone@example.com"], "subject": "Hello", "text": "Plain body"},
+    timeout=30,
+).raise_for_status()`;
+  return `<div class="connect">
+    <h3>Option A — SMTP (for apps with "SMTP settings": Gitea, Grafana, Vaultwarden, …)</h3>${smtpHtml}
+    <h3>Option B — HTTP API</h3>
+    <dl>
+      <dt>Endpoint</dt><dd><code>POST ${esc(info.api.send_url)}</code></dd>
+      <dt>Auth header</dt><dd><code>Authorization: Bearer ${esc(pw)}</code> or <code>X-API-Key</code></dd>
+      <dt>Delivery status</dt><dd><code>GET ${esc(info.api.status_url)}</code></dd>
+      <dt>Docs</dt><dd><code>${esc(info.api.docs_url)}</code></dd>
+    </dl>
+    ${codeBox(curl)}${codeBox(py)}
+    <h3>Limits for this app</h3>
+    <dl>
+      <dt>Rate limit</dt><dd>${esc(limits)}</dd>
+      <dt>Allowed From</dt><dd>${esc(fromList)} <span class="muted">(default: ${esc(info.default_from)})</span></dd>
+      <dt>Max recipients</dt><dd>${info.max_recipients} per message</dd>
+      <dt>Max size</dt><dd>${(info.max_attachment_bytes / 1048576).toFixed(1)} MB of attachments</dd>
+    </dl></div>`;
+}
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-copy]");
+  if (!b) return;
+  await navigator.clipboard.writeText(b.dataset.copy);
+  b.textContent = "Copied";
+  setTimeout(() => (b.textContent = "Copy"), 1500);
+});
+$("#connect-close").addEventListener("click", () => $("#connect-dialog").close());
 
 // ---------------------------------------------------------------- keys
 async function loadKeys() {
@@ -95,6 +173,7 @@ async function loadKeys() {
       <td>${fmtTime(k.last_used_at)}</td>
       <td>${revoked ? `<span class="badge s-failed">revoked</span>` : `<span class="badge s-sent">active</span>`}</td>
       <td style="white-space:nowrap">
+        ${revoked ? "" : `<button class="secondary small" data-connect="${k.id}">Connect</button>`}
         <button class="secondary small" data-logs="${k.id}">Logs</button>
         ${revoked ? "" : `<button class="secondary small" data-edit="${k.id}">Edit</button>
         <button class="danger small" data-revoke="${k.id}">Revoke</button>`}
@@ -106,6 +185,12 @@ $("#keys-body").addEventListener("click", async (e) => {
   const t = e.target.closest("button");
   if (!t) return;
   if (t.dataset.edit) openKeyDialog(window._keys.find((k) => k.id == t.dataset.edit));
+  if (t.dataset.connect) {
+    const k = window._keys.find((k) => k.id == t.dataset.connect);
+    $("#connect-title").textContent = `How to connect "${k.name}"`;
+    $("#connect-body").innerHTML = renderConnect(await getConnectInfo(), k, null);
+    $("#connect-dialog").showModal();
+  }
   if (t.dataset.logs) {
     const k = window._keys.find((k) => k.id == t.dataset.logs);
     resetFilters(); switchTab("logs");
@@ -151,6 +236,7 @@ $("#key-form").addEventListener("submit", async (e) => {
       const created = await api("/admin/api/keys", { method: "POST", body });
       $("#key-dialog").close();
       $("#secret-value").textContent = created.api_key;
+      $("#secret-connect").innerHTML = renderConnect(await getConnectInfo(), created, created.api_key);
       $("#secret-dialog").showModal();
     }
     loadKeys();
@@ -163,6 +249,7 @@ $("#secret-copy").addEventListener("click", async () => {
 });
 $("#secret-close").addEventListener("click", () => {
   $("#secret-value").textContent = "";  // drop it from the DOM
+  $("#secret-connect").innerHTML = "";
   $("#secret-copy").textContent = "Copy";
   $("#secret-dialog").close();
 });
@@ -199,11 +286,12 @@ async function loadLogs() {
     return `<tr class="clickable" data-id="${esc(m.id)}">
       <td style="white-space:nowrap">${fmtTime(m.created_at)}</td>
       <td>${esc(m.app_name)}</td>
+      <td>${esc(m.source || "")}</td>
       <td class="ellip">${esc(to.join(", "))}${bcc ? ` <span class="muted">+${bcc} bcc</span>` : ""}</td>
       <td class="ellip">${esc(m.subject)}${m.attachment_count ? ` <span class="muted">📎${m.attachment_count}</span>` : ""}</td>
       <td>${badge(m.status)}</td><td>${m.attempts}</td>
       <td class="ellip">${esc(m.error)}</td></tr>`;
-  }).join("") : `<tr><td colspan="7" class="muted">No matching messages</td></tr>`;
+  }).join("") : `<tr><td colspan="8" class="muted">No matching messages</td></tr>`;
   const end = Math.min(logOffset + PAGE, total);
   $("#page-info").textContent = total ? `${logOffset + 1}–${end} of ${total}` : "";
   $("#prev").disabled = logOffset === 0;
@@ -231,7 +319,7 @@ async function openMessage(id) {
     ["Updated", fmtTime(m.updated_at)], ["Attempts", m.attempts],
     ["Next attempt", m.next_attempt_at ? fmtTime(m.next_attempt_at) : "—"],
     ["Size", `${m.size_bytes} bytes, ${m.attachment_count} attachment(s), ${m.has_html ? "HTML" : "text only"}`],
-    ["Message-ID", `<code>${esc(m.provider_id)}</code>`], ["Client IP", esc(m.client_ip)], ["Error", esc(m.error)],
+    ["Message-ID", `<code>${esc(m.provider_id)}</code>`], ["Via", esc(m.source)], ["Client IP", esc(m.client_ip)], ["Error", esc(m.error)],
   ].filter(([, v]) => v !== "" && v !== "<code></code>");
   const events = m.events.map((ev) => `<tr><td style="white-space:nowrap">${fmtTime(ev.ts)}</td><td>${esc(ev.event)}</td><td>${esc(ev.detail)}</td></tr>`).join("");
   const body = m.payload

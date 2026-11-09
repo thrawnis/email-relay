@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
-import time
 from contextlib import asynccontextmanager
+from email import policy as email_policy
+from email.parser import BytesParser
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -18,8 +20,9 @@ from .backends import Backend, get_backend
 from .config import Settings
 from .db import Database
 from .schemas import KeyCreate, KeyUpdate, SendRequest
-from .security import (LoginThrottle, address_matches, check_password, extract_key, generate_key,
-                       hash_key)
+from .security import LoginThrottle, check_password, extract_key, generate_key
+from .service import Relay
+from .submission import SubmissionServer
 from .worker import Worker
 
 log = logging.getLogger("relay")
@@ -44,14 +47,28 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
     backend = backend or get_backend(settings)
     worker = Worker(db, backend, settings)
     throttle = LoginThrottle()
+    loop_ref: dict = {}
+
+    def notify_worker() -> None:  # callable from the SMTP server thread too
+        loop = loop_ref.get("loop")
+        if loop is not None:
+            loop.call_soon_threadsafe(worker.notify)
+        else:
+            worker.notify()
+
+    relay = Relay(db, settings, notify_worker)
+    submission = SubmissionServer(relay, settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        loop_ref["loop"] = asyncio.get_running_loop()
         task = asyncio.create_task(worker.run())
+        submission.start()
         log.info("Email relay started: backend=%s from=%s", backend.describe(), settings.mail_from)
         try:
             yield
         finally:
+            submission.stop()
             await worker.stop()
             task.cancel()
             db.close()
@@ -61,6 +78,7 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, session_cookie="relay_admin",
                        max_age=12 * 3600, same_site="strict", https_only=settings.cookie_secure)
     app.state.db, app.state.worker, app.state.settings, app.state.backend = db, worker, settings, backend
+    app.state.relay, app.state.submission = relay, submission
 
     def client_ip(request: Request) -> str | None:
         if settings.trust_proxy:
@@ -110,28 +128,31 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
 
     # ------------------------------------------------------------ public API
     def reject(status: int, error: str, *, request: Request, key: dict | None = None,
-               body: dict | None = None, app_name: str | None = None) -> JSONResponse:
-        """Log a rejected send attempt and return the error response."""
+               body: dict | None = None) -> JSONResponse:
+        """Log a rejected HTTP send attempt and return the error response."""
         body = body if isinstance(body, dict) else {}
         recips = {k: [str(a) for a in v] if isinstance(v, list) else ([str(v)] if v else [])
                   for k, v in ((f, body.get(f)) for f in ("to", "cc", "bcc"))}
         subject = body.get("subject") if isinstance(body.get("subject"), str) else None
-        msg_id = db.insert_message(
-            key_id=key["id"] if key else None, app_name=app_name or (key["name"] if key else "(unauthenticated)"),
-            from_addr=str(body.get("from")) if body.get("from") else None, recipients=recips, subject=subject,
-            status="rejected", error=error, client_ip=client_ip(request))
-        return JSONResponse({"id": msg_id, "status": "rejected", "error": error}, status_code=status)
+        adm = relay.reject(error, status_code=status, source="api", key=key, recipients=recips, subject=subject,
+                           from_addr=str(body.get("from")) if body.get("from") else None,
+                           client_ip=client_ip(request))
+        return admission_response(adm)
+
+    def admission_response(adm) -> JSONResponse:
+        if adm.ok:
+            return JSONResponse({"id": adm.message_id, "status": "queued"}, status_code=202)
+        resp = JSONResponse({"id": adm.message_id, "status": "rejected", "error": adm.error},
+                            status_code=adm.status_code)
+        if adm.retry_after:
+            resp.headers["Retry-After"] = str(adm.retry_after)
+        return resp
 
     def authenticate(request: Request) -> tuple[dict | None, str | None]:
         raw = extract_key(request.headers.get("authorization"), request.headers.get("x-api-key"))
         if not raw:
             return None, "Missing API key (use 'Authorization: Bearer <key>' or 'X-API-Key')"
-        key = db.get_key_by_hash(hash_key(raw))
-        if not key:
-            return None, f"Invalid API key ({raw[:10]}…)"
-        if key["revoked_at"]:
-            return key, f"API key '{key['name']}' has been revoked"
-        return key, None
+        return relay.authenticate(raw)
 
     @app.post("/api/send", status_code=202)
     async def send(request: Request):
@@ -147,7 +168,6 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
             body = None
         if auth_err:  # key is set only when it exists but is revoked
             return reject(403 if key else 401, auth_err, request=request, key=key, body=body)
-        db.touch_key(key["id"])
 
         if not isinstance(body, dict):
             return reject(400, "Request body must be a JSON object", request=request, key=key)
@@ -155,10 +175,6 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
             req = SendRequest.model_validate(body)
         except ValidationError as e:
             return reject(422, _validation_message(e), request=request, key=key, body=body)
-
-        if len(req.all_recipients()) > settings.max_recipients:
-            return reject(422, f"Too many recipients (max {settings.max_recipients})",
-                          request=request, key=key, body=body)
         try:
             att_size = sum(a.decoded_size() for a in req.attachments)
         except ValueError as e:
@@ -167,34 +183,12 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
             return reject(413, f"Attachments total {att_size} bytes; max is {settings.max_attachment_bytes}",
                           request=request, key=key, body=body)
 
-        from_addr = str(req.from_ or settings.mail_from)
-        if not address_matches(from_addr, settings.mail_allowed_from):
-            return reject(403, f"Sender {from_addr} is not allowed by the relay", request=request, key=key, body=body)
-        if key["allowed_from"] and not address_matches(from_addr, key["allowed_from"]):
-            return reject(403, f"Sender {from_addr} is not allowed for this API key",
-                          request=request, key=key, body=body)
-
-        size = len(req.text or "") + len(req.html or "") + att_size
-        with db.tx():  # quota check + insert are atomic
-            now = time.time()
-            if key["rate_per_minute"] and db.count_accepted_since(key["id"], now - 60) >= key["rate_per_minute"]:
-                limit_err = f"Rate limit exceeded: {key['rate_per_minute']} messages/minute"
-            elif key["rate_per_day"] and db.count_accepted_since(key["id"], now - 86400) >= key["rate_per_day"]:
-                limit_err = f"Quota exceeded: {key['rate_per_day']} messages/24h"
-            else:
-                limit_err = None
-                msg_id = db.insert_message(
-                    key_id=key["id"], app_name=key["name"], from_addr=from_addr,
-                    recipients={"to": req.to, "cc": req.cc, "bcc": req.bcc}, subject=req.subject,
-                    has_html=bool(req.html), attachment_count=len(req.attachments), size_bytes=size,
-                    status="queued", client_ip=client_ip(request), payload=req.to_payload())
-        if limit_err:
-            resp = reject(429, limit_err, request=request, key=key, body=body)
-            resp.headers["Retry-After"] = "60"
-            return resp
-
-        worker.notify()
-        return {"id": msg_id, "status": "queued"}
+        adm = relay.admit(
+            key=key, source="api", from_addr=str(req.from_ or settings.mail_from),
+            recipients={"to": req.to, "cc": req.cc, "bcc": req.bcc}, subject=req.subject,
+            payload=req.to_payload(), has_html=bool(req.html), attachment_count=len(req.attachments),
+            size_bytes=len(req.text or "") + len(req.html or "") + att_size, client_ip=client_ip(request))
+        return admission_response(adm)
 
     @app.get("/api/messages/{message_id}")
     async def message_status(message_id: str, request: Request):
@@ -245,7 +239,23 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
     @app.get("/admin/api/config")
     async def config(request: Request):
         require_admin(request)
-        return {**settings.public_summary(), "backend": backend.describe()}
+        return {**settings.public_summary(), "backend": backend.describe(), "submission": submission.status()}
+
+    @app.get("/admin/api/connect-info")
+    async def connect_info(request: Request):
+        """What an app needs to connect (never includes the relay's upstream credentials)."""
+        require_admin(request)
+        host = settings.public_hostname
+        return {
+            "api": {"send_url": f"https://{host}/api/send", "status_url": f"https://{host}/api/messages/{{id}}",
+                    "docs_url": f"https://{host}/api/docs"},
+            "smtp": submission.status() | {"host": host},
+            "default_from": settings.mail_from,
+            "default_from_name": settings.mail_from_name,
+            "allowed_from": settings.mail_allowed_from,
+            "max_recipients": settings.max_recipients,
+            "max_attachment_bytes": settings.max_attachment_bytes,
+        }
 
     @app.get("/admin/api/keys")
     async def list_keys(request: Request):
@@ -302,6 +312,17 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
         if payload:
             for a in payload.get("attachments") or []:
                 a["content"] = f"<{len(a['content'])} base64 chars>"
+            if payload.get("raw"):  # SMTP submission: show the readable parts of the original MIME
+                raw = base64.b64decode(payload.pop("raw"))
+                parsed = BytesParser(policy=email_policy.default).parsebytes(raw)
+                for kind in ("plain", "html"):
+                    part = parsed.get_body(preferencelist=(kind,))
+                    if part is not None:
+                        try:
+                            payload["text" if kind == "plain" else "html"] = part.get_content()
+                        except Exception:
+                            pass
+                payload["raw_size"] = len(raw)
         m["payload"] = payload
         m["retryable"] = m["status"] == "failed" and payload is not None
         m["events"] = db.get_events(message_id)
@@ -335,7 +356,7 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
         msg_id = db.insert_message(
             key_id=None, app_name="(admin test)", from_addr=settings.mail_from,
             recipients={"to": req.to, "cc": [], "bcc": []}, subject=req.subject, size_bytes=len(req.text or ""),
-            status="queued", client_ip=client_ip(request), payload=req.to_payload())
+            status="queued", client_ip=client_ip(request), payload=req.to_payload(), source="admin")
         worker.notify()
         return {"id": msg_id, "status": "queued"}
 

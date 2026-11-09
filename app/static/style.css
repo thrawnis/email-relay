@@ -51,3 +51,8 @@ dialog label input, dialog label textarea { width: 100%; }
 .secret { display: flex; gap: 8px; align-items: center; background: var(--bg); padding: 10px; border-radius: 6px; margin: 12px 0; }
 .secret code { flex: 1; word-break: break-all; font-size: 13px; }
 pre { background: var(--bg); padding: 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto; font-size: 12px; }
+.connect h3 { margin-top: 20px; }
+.connect dl { margin-bottom: 8px; }
+.connect .codebox { position: relative; }
+.connect .codebox button { position: absolute; top: 6px; right: 6px; }
+.note { background: var(--bg); border-left: 3px solid var(--warn); padding: 8px 12px; border-radius: 4px; margin: 8px 0; }

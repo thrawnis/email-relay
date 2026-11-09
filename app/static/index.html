@@ -86,7 +86,7 @@
             <button type="button" id="f-reset" class="secondary">Reset</button>
           </form>
           <table class="logs">
-            <thead><tr><th>Time</th><th>App</th><th>To</th><th>Subject</th><th>Status</th><th>Tries</th><th>Error</th></tr></thead>
+            <thead><tr><th>Time</th><th>App</th><th>Via</th><th>To</th><th>Subject</th><th>Status</th><th>Tries</th><th>Error</th></tr></thead>
             <tbody id="logs-body"></tbody>
           </table>
           <div class="pager">
@@ -120,11 +120,19 @@
   </dialog>
 
   <!-- One-time key display -->
-  <dialog id="secret-dialog">
+  <dialog id="secret-dialog" class="wide">
     <h2>API key created</h2>
-    <p>Copy this key now. <strong>It will not be shown again</strong> — only its hash is stored.</p>
+    <p>Copy this key now. <strong>It will not be shown again</strong> — only its hash is stored.
+      It is both the HTTP API key and the SMTP password.</p>
     <div class="secret"><code id="secret-value"></code><button id="secret-copy" class="secondary">Copy</button></div>
+    <div id="secret-connect"></div>
     <div class="row-end"><button id="secret-close">I've saved it</button></div>
+  </dialog>
+
+  <!-- Connection details for an existing key -->
+  <dialog id="connect-dialog" class="wide">
+    <div class="row-between"><h2 id="connect-title">How to connect</h2><button id="connect-close" class="secondary">Close</button></div>
+    <div id="connect-body"></div>
   </dialog>
 
   <!-- Message detail -->

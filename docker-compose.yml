@@ -1,15 +1,23 @@
 # Image is built by ./rebuild.sh (docker buildx build --load), not by `docker compose build`.
 #
-# No host port is published: the relay is only reachable through Nginx Proxy Manager
-# (and optionally cloudflared) over the shared Docker network named by PROXY_NETWORK.
-# Proxy target from NPM / cloudflared:  http://email-relay:8000
+# HTTP (admin UI + API) is NOT published on the host: it is only reachable through
+# Nginx Proxy Manager (and optionally cloudflared) over the shared Docker network named
+# by PROXY_NETWORK. Proxy target from NPM / cloudflared:  http://email-relay:8000
+#
+# SMTP submission (for SMTP-only apps) IS published, TLS-only and AUTH-required:
+#   587 = STARTTLS, 465 = implicit TLS.
 services:
   email-relay:
     image: email-relay:latest
     container_name: email-relay
     env_file: .env
+    ports:
+      - "${SUBMISSION_HOST_BIND:-0.0.0.0}:${SUBMISSION_STARTTLS_PORT:-587}:${SUBMISSION_STARTTLS_PORT:-587}"
+      - "${SUBMISSION_HOST_BIND:-0.0.0.0}:${SUBMISSION_TLS_PORT:-465}:${SUBMISSION_TLS_PORT:-465}"
     volumes:
       - ./data:/data
+      # NPM's Let's Encrypt directory (read-only), so SMTP submission can use the same trusted cert
+      - ${NPM_LETSENCRYPT_DIR:-./data/no-npm-certs}:/npm-letsencrypt:ro
     networks:
       - proxy
     restart: unless-stopped
