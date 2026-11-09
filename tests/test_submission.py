@@ -22,7 +22,7 @@ def free_port():
 @pytest.fixture
 def smtp_env(tmp_path):
     settings = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "s.db"),
-                        mail_from="notify@thetruesource.com", mail_allowed_from=["notify@thetruesource.com"],
+                        mail_from="notify@example.com", mail_allowed_from=["notify@example.com"],
                         mail_backend="console", retry_schedule=[0], public_hostname="localhost",
                         submission_enabled=True, submission_bind="127.0.0.1",
                         submission_starttls_port=free_port(), submission_tls_port=free_port())
@@ -41,7 +41,7 @@ def tls_ctx(settings):
 
 def make_msg(**kw):
     m = EmailMessage()
-    m["From"] = kw.get("frm", "Gitea <notify@thetruesource.com>")
+    m["From"] = kw.get("frm", "Gitea <notify@example.com>")
     m["To"] = "alice@example.com"
     m["Cc"] = "carol@example.com"
     m["Bcc"] = "secret@example.com"
@@ -74,7 +74,7 @@ def test_starttls_submission_delivers_original_mime(smtp_env):
     wait_until(lambda: backend.sent)
     payload, from_addr, _ = backend.sent[0]
     raw = base64.b64decode(payload["raw"])
-    assert from_addr == "notify@thetruesource.com"
+    assert from_addr == "notify@example.com"
     assert sorted(payload["envelope_to"]) == ["alice@example.com", "carol@example.com", "secret@example.com"]
     assert b"Bcc:" not in raw and b"secret@example.com" not in raw
     assert b"build.log" in raw and b"Message-ID" in raw.split(b"\r\n\r\n")[0]
@@ -101,7 +101,7 @@ def test_auth_required_and_bad_key_logged(smtp_env):
     with smtplib.SMTP("localhost", settings.submission_starttls_port, timeout=5) as s:
         s.starttls(context=tls_ctx(settings))
         s.ehlo()
-        code, _ = s.mail("notify@thetruesource.com")
+        code, _ = s.mail("notify@example.com")
         assert code == 530  # MAIL before AUTH
         with pytest.raises(smtplib.SMTPAuthenticationError):
             s.login("gitea", "erk_wrong")
@@ -146,9 +146,9 @@ def test_smtp_backend_forwards_raw_bytes(monkeypatch):
             pass
 
     monkeypatch.setattr(SMTPBackend, "_connect", lambda self: FakeConn())
-    raw = b"Message-ID: <abc@x>\r\nFrom: notify@thetruesource.com\r\nTo: a@x.com\r\nSubject: s\r\n\r\nbody\r\n"
+    raw = b"Message-ID: <abc@x>\r\nFrom: notify@example.com\r\nTo: a@x.com\r\nSubject: s\r\n\r\nbody\r\n"
     res = SMTPBackend("h", 587, "", "", "starttls", 5).send(
         {"raw": base64.b64encode(raw).decode(), "envelope_to": ["a@x.com", "hidden@x.com"]},
-        "notify@thetruesource.com", None)
-    assert calls == {"frm": "notify@thetruesource.com", "rcpts": ["a@x.com", "hidden@x.com"], "data": raw}
+        "notify@example.com", None)
+    assert calls == {"frm": "notify@example.com", "rcpts": ["a@x.com", "hidden@x.com"], "data": raw}
     assert res.provider_id == "<abc@x>"

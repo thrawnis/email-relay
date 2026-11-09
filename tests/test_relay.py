@@ -31,8 +31,8 @@ class FakeBackend(Backend):
 @pytest.fixture
 def env(tmp_path):
     settings = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "t.db"),
-                        mail_from="notify@thetruesource.com", mail_from_name="TTS",
-                        mail_allowed_from=["notify@thetruesource.com", "*@apps.thetruesource.com"],
+                        mail_from="notify@example.com", mail_from_name="TTS",
+                        mail_allowed_from=["notify@example.com", "*@apps.example.com"],
                         mail_backend="console", retry_schedule=[0], max_attempts=3)
     backend = FakeBackend()
     app = create_app(settings, backend)
@@ -92,7 +92,7 @@ def test_send_happy_path(env):
     st = wait_status(client, key, r.json()["id"], {"sent"})
     assert st["provider_id"] == "<fake-1@x>"
     payload, from_addr, from_name = backend.sent[0]
-    assert from_addr == "notify@thetruesource.com" and from_name == "TTS"
+    assert from_addr == "notify@example.com" and from_name == "TTS"
     assert payload["bcc"] == ["b@example.com"]
     # payload (body) is dropped after delivery, metadata stays
     m = client.get(f"/admin/api/messages/{r.json()['id']}").json()
@@ -125,10 +125,10 @@ def test_validation_errors_logged(env):
 
 def test_from_restrictions(env):
     client, _, _ = env
-    key = make_key(client, allowed_from=["*@apps.thetruesource.com"])["api_key"]
+    key = make_key(client, allowed_from=["*@apps.example.com"])["api_key"]
     assert send(client, key, **{"from": "evil@gmail.com"}).status_code == 403
     assert send(client, key).status_code == 403  # default sender isn't in this key's list
-    assert send(client, key, **{"from": "billing@apps.thetruesource.com"}).status_code == 202
+    assert send(client, key, **{"from": "billing@apps.example.com"}).status_code == 202
 
 
 def test_rate_limit(env):
@@ -147,7 +147,7 @@ def test_attachments(env):
     r = send(client, key, attachments=[{"filename": "a.pdf", "content": content, "content_type": "application/pdf"}])
     assert r.status_code == 202
     wait_status(client, key, r.json()["id"], {"sent"})
-    mime = build_mime(backend.sent[0][0], "notify@thetruesource.com", None)
+    mime = build_mime(backend.sent[0][0], "notify@example.com", None)
     atts = list(mime.iter_attachments())
     assert atts[0].get_filename() == "a.pdf" and atts[0].get_content() == b"%PDF-1.4 fake"
     assert send(client, key, attachments=[{"filename": "x", "content": "!!!"}]).status_code == 422
@@ -239,7 +239,7 @@ def test_smtp_error_classification(monkeypatch):
 @pytest.fixture
 def proxied(tmp_path):
     settings = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "p.db"),
-                        mail_from="notify@thetruesource.com", mail_allowed_from=["notify@thetruesource.com"],
+                        mail_from="notify@example.com", mail_allowed_from=["notify@example.com"],
                         mail_backend="console", trust_proxy=True)
     app = create_app(settings, FakeBackend())
     with TestClient(app, base_url="http://relay") as client:
@@ -310,7 +310,7 @@ def test_plain_http_rejected_everywhere(env):
 def test_trusted_proxies_only(tmp_path):
     # TestClient's peer address is "testclient", which is not in TRUSTED_PROXIES -> headers ignored
     s = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "tp.db"),
-                 mail_from="notify@thetruesource.com", mail_backend="console", trust_proxy=True,
+                 mail_from="notify@example.com", mail_backend="console", trust_proxy=True,
                  trusted_proxies=["192.168.1.10"])
     with TestClient(create_app(s, FakeBackend())) as client:
         # spoofed X-Forwarded-Proto from an untrusted peer does not count as HTTPS

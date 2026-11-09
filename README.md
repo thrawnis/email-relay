@@ -2,7 +2,7 @@
 
 A small, self-hosted outbound email relay for internal apps — a lightweight alternative to SendGrid/Mailgun.
 
-The relay holds the **one real set of sending credentials** (for `notify@thetruesource.com`) and gives each app
+The relay holds the **one real set of sending credentials** (for `notify@example.com`) and gives each app
 its **own virtual key**. Apps either call `POST /api/send` with their key, or, if they only support SMTP,
 log in to the relay's own SMTP submission port with the key as the password. The relay queues the message,
 delivers it through the real backend with retry/backoff, and logs every attempt.
@@ -33,7 +33,7 @@ delivers it through the real backend with retry/backoff, and logs every attempt.
 ## Setup
 
 ```bash
-git clone https://github.com/thrawnis/email-relay.git email-relay && cd email-relay
+git clone https://github.com/<your-user>/email-relay.git email-relay && cd email-relay
 cp .env.example .env
 ```
 
@@ -41,7 +41,7 @@ Edit `.env` and set at least:
 
 - `ADMIN_PASSWORD`
 - `SECRET_KEY` (generate it with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`)
-- `MAIL_FROM` and the `SMTP_*` settings for `notify@thetruesource.com`
+- `MAIL_FROM` and the `SMTP_*` settings for `notify@example.com`
 - `PUBLIC_HOSTNAME`, `SUBMISSION_HOSTNAME` and `TRUSTED_PROXIES` (see below)
 
 `.env` is git-ignored, so the real credentials stay on the server only.
@@ -102,7 +102,7 @@ LAN IP and rely on your network's segmentation, or add the restrictions to the `
 ### 2. Nginx Proxy Manager (on the other server)
 
 Add a Proxy Host:
-- **Domain:** `emailrelay.thetruesource.com` (`PUBLIC_HOSTNAME`). Point it at the NPM server in your local DNS only.
+- **Domain:** `emailrelay.example.com` (`PUBLIC_HOSTNAME`). Point it at the NPM server in your local DNS only.
 - **Scheme / Forward host / Port:** **`https`** / the relay host's LAN IP / `8443`.
 - **SSL tab:** request a Let's Encrypt certificate **using a DNS challenge** with Cloudflare as the provider (a Cloudflare API token with `Zone:DNS:Edit`). Enable **Force SSL**, **HTTP/2** and **HSTS**.
 
@@ -113,8 +113,8 @@ Then set `TRUSTED_PROXIES` in the relay's `.env` to the NPM server's IP (plus cl
 
 ### 3. Cloudflare Tunnel (remote admin access)
 
-- Add a public hostname for the **same name**, `emailrelay.thetruesource.com`. Point it at **NPM** (`https://<npm-ip>` with
-  the origin server name `emailrelay.thetruesource.com`), or directly at `https://<relay-host>:8443` with *No TLS Verify* enabled.
+- Add a public hostname for the **same name**, `emailrelay.example.com`. Point it at **NPM** (`https://<npm-ip>` with
+  the origin server name `emailrelay.example.com`), or directly at `https://<relay-host>:8443` with *No TLS Verify* enabled.
   This is split DNS: Cloudflare's public DNS sends outside visitors to the tunnel, and your local DNS override sends LAN
   clients straight to NPM. One name works everywhere, and the HSTS and cookie settings stay consistent.
   If it points straight at the relay, add the cloudflared host's IP to `TRUSTED_PROXIES`.
@@ -124,12 +124,12 @@ Then set `TRUSTED_PROXIES` in the relay's `.env` to the NPM server's IP (plus cl
 ### 4. SMTP hostname and a certificate apps can verify
 
 NPM only proxies HTTP, so SMTP-only apps connect straight to the relay host. Give it its own name, for example
-`SUBMISSION_HOSTNAME=smtp.emailrelay.thetruesource.com`, and in local DNS point that name at the **relay host's** IP.
+`SUBMISSION_HOSTNAME=smtp.emailrelay.example.com`, and in local DNS point that name at the **relay host's** IP.
 
 By default the relay uses a self-signed certificate covering both hostnames, stored in `./data/tls/`. The Overview page flags it.
 It works, but each SMTP app would then have to trust it or skip verification. For a trusted certificate:
 
-1. On the NPM server, issue a Let's Encrypt certificate for `smtp.emailrelay.thetruesource.com` with the DNS challenge
+1. On the NPM server, issue a Let's Encrypt certificate for `smtp.emailrelay.example.com` with the DNS challenge
    (*SSL Certificates → Add → Let's Encrypt*). It doesn't need a proxy host.
 2. Copy its `fullchain.pem` and `privkey.pem` to the relay host as `./data/certs/`, and keep them in sync with a daily cron job on the relay host:
    ```bash
@@ -163,7 +163,7 @@ put the CA certificate in `./data/` and set `SMTP_CA_FILE=/data/<name>.crt`. Don
 4. It builds with `docker buildx build --tag email-relay:latest --build-arg GIT_SHA=<sha> --load .`, not `docker compose build`. The Dockerfile bakes the SHA in as `LABEL git_sha=...`.
 5. It restarts with `docker compose down && docker compose up -d --no-build`, then waits for the healthcheck to pass.
 
-There is no self-restart handoff: the relay never redeploys itself from inside its own container. If you later add it to Deployment Helper as an ordinary sibling app, this script works as is.
+There is no self-restart handoff: the relay never redeploys itself from inside its own container. If a deployment tool triggers it as an ordinary app, this script works as is.
 
 ### Data and backups
 
@@ -181,7 +181,7 @@ Run **one** container with **one** uvicorn worker. The delivery queue runs insid
 Authenticate with `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 
 ```bash
-curl -X POST https://emailrelay.thetruesource.com/api/send \
+curl -X POST https://emailrelay.example.com/api/send \
   -H "Authorization: Bearer erk_..." \
   -H "Content-Type: application/json" \
   -d '{
@@ -209,7 +209,7 @@ Python example:
 
 ```python
 import base64, requests
-requests.post("https://emailrelay.thetruesource.com/api/send", headers={"Authorization": f"Bearer {KEY}"}, json={
+requests.post("https://emailrelay.example.com/api/send", headers={"Authorization": f"Bearer {KEY}"}, json={
     "to": "alice@example.com", "subject": "Report", "text": "See attached.",
     "attachments": [{"filename": "report.pdf", "content_type": "application/pdf",
                      "content": base64.b64encode(open("report.pdf", "rb").read()).decode()}],
@@ -239,11 +239,11 @@ Use the details from the key's **Connect** dialog. In the app's mail settings, e
 
 | Setting | Value |
 |---|---|
-| Host | `SUBMISSION_HOSTNAME` (e.g. `smtp.emailrelay.thetruesource.com`) |
+| Host | `SUBMISSION_HOSTNAME` (e.g. `smtp.emailrelay.example.com`) |
 | Port / security | `587` + STARTTLS (preferred) or `465` + SSL/TLS |
 | Username | the app's name (informational) |
 | Password | the app's relay key (`erk_…`) |
-| From | `notify@thetruesource.com`, or another address the key is allowed to use |
+| From | `notify@example.com`, or another address the key is allowed to use |
 
 How it behaves:
 - TLS is mandatory. AUTH isn't offered before STARTTLS, and MAIL is refused before AUTH.
@@ -278,7 +278,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 To run locally with the console backend:
 
 ```bash
-ADMIN_PASSWORD=dev SECRET_KEY=$(python3 -c "print('x'*40)") MAIL_FROM=notify@thetruesource.com \
+ADMIN_PASSWORD=dev SECRET_KEY=$(python3 -c "print('x'*40)") MAIL_FROM=notify@example.com \
   MAIL_BACKEND=console DB_PATH=./data/dev.db SUBMISSION_ENABLED=false .venv/bin/python -m app.serve
 # → https://localhost:8000/admin (self-signed cert generated in ./data/tls)
 ```
