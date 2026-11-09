@@ -36,7 +36,7 @@ def env(tmp_path):
                         mail_backend="console", retry_schedule=[0], max_attempts=3)
     backend = FakeBackend()
     app = create_app(settings, backend)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
         yield client, backend, app
 
 
@@ -240,7 +240,7 @@ def test_smtp_error_classification(monkeypatch):
 def proxied(tmp_path):
     settings = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "p.db"),
                         mail_from="notify@thetruesource.com", mail_allowed_from=["notify@thetruesource.com"],
-                        mail_backend="console", trust_proxy=True, require_https=True, cookie_secure=True)
+                        mail_backend="console", trust_proxy=True)
     app = create_app(settings, FakeBackend())
     with TestClient(app, base_url="http://relay") as client:
         yield client, app
@@ -257,7 +257,8 @@ def test_require_https_rejects_plain_http(proxied):
     r = client.post("/api/send", json={}, headers={"X-Forwarded-Proto": "http"})
     assert r.status_code == 403
     assert app.state.db.query_one("SELECT error FROM messages")["error"].startswith("HTTPS required")
-    assert client.get("/healthz").status_code == 200  # healthcheck stays reachable
+    assert client.get("/healthz").status_code == 403  # no exceptions, not even the healthcheck
+    assert client.get("/healthz", headers=HTTPS).status_code == 200
     r = client.get("/admin", headers=HTTPS)
     assert r.status_code == 200 and "max-age" in r.headers["strict-transport-security"]
 
@@ -287,18 +288,30 @@ def test_api_blocked_through_cloudflare_tunnel(proxied):
     assert client.post("/admin/api/login", json={"password": PASSWORD}, headers=TUNNEL).status_code == 200
 
 
-def test_require_https_needs_trust_proxy(tmp_path):
-    s = Settings(admin_password="p", secret_key="x" * 40, mail_from="a@b.com", mail_backend="console",
-                 db_path=str(tmp_path / "x.db"), require_https=True)
-    with pytest.raises(RuntimeError, match="TRUST_PROXY"):
-        create_app(s, FakeBackend())
+@pytest.mark.parametrize("name", ["HTTP_TLS", "REQUIRE_HTTPS", "COOKIE_SECURE"])
+def test_https_cannot_be_turned_off(tmp_path, monkeypatch, name):
+    for k, v in {"ADMIN_PASSWORD": "p", "SECRET_KEY": "x" * 40, "MAIL_FROM": "a@b.com", "MAIL_BACKEND": "console",
+                 "DB_PATH": str(tmp_path / "x.db"), name: "false"}.items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(RuntimeError, match=f"{name}=false is no longer supported"):
+        create_app()
+
+
+def test_plain_http_rejected_everywhere(env):
+    client, _, app = env
+    plain = TestClient(app, base_url="http://testserver")  # lifespan already running via `env`
+    for path in ("/admin", "/healthz", "/admin/api/me", "/api/docs"):
+        assert plain.get(path).status_code == 403, path
+    assert plain.post("/api/send", json={}).status_code == 403
+    r = client.get("/admin")
+    assert r.status_code == 200 and r.headers["strict-transport-security"].startswith("max-age=")
 
 
 def test_trusted_proxies_only(tmp_path):
     # TestClient's peer address is "testclient", which is not in TRUSTED_PROXIES -> headers ignored
     s = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "tp.db"),
                  mail_from="notify@thetruesource.com", mail_backend="console", trust_proxy=True,
-                 require_https=True, trusted_proxies=["192.168.1.10"])
+                 trusted_proxies=["192.168.1.10"])
     with TestClient(create_app(s, FakeBackend())) as client:
         # spoofed X-Forwarded-Proto from an untrusted peer does not count as HTTPS
         assert client.get("/admin", headers={"X-Forwarded-Proto": "https"}).status_code == 403

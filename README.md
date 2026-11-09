@@ -63,15 +63,19 @@ To try it without sending real mail, set `MAIL_BACKEND=console`. Messages are th
  SMTP-only apps ──SMTP + STARTTLS/TLS──▶ relay host :587 / :465 (direct; NPM can't proxy SMTP)
 ```
 
-Every hop is encrypted. The relay serves **HTTPS itself** on its LAN port (`HTTP_TLS=true`), so the hop from NPM to the
-relay is encrypted too, and there is no plain-HTTP port at all. The relay also enforces:
+**The relay only runs over HTTPS; there is no setting to turn that off.**
+- It serves HTTPS itself on its LAN port, so even the hop from NPM to the relay is encrypted. There is no plain-HTTP port at all.
+- Every request must have arrived over HTTPS. Behind a proxy, that means a trusted proxy's `X-Forwarded-Proto` must be `https`. Anything else gets a 403, including `/healthz`, and plain-HTTP send attempts are logged as rejected.
+- Every response carries HSTS, and the admin session cookie is always `Secure`.
+- SMTP submission is TLS-only as well.
+- Setting `HTTP_TLS`, `REQUIRE_HTTPS` or `COOKIE_SECURE` to `false` makes the relay refuse to start.
+
+The relay also has these settings:
 
 | Setting | Effect |
 |---|---|
-| `REQUIRE_HTTPS=true` | Any request whose `X-Forwarded-Proto` (from a trusted proxy) isn't `https` gets a 403. Plain-HTTP send attempts are logged as rejected. Responses carry HSTS. |
 | `TRUST_PROXY=true` + `TRUSTED_PROXIES` | The client IP (`CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For`) and scheme are taken from proxy headers **only** when the request comes from a listed IP. Set this to the NPM server's IP and the cloudflared host's IP. |
 | `BLOCK_API_VIA_CLOUDFLARE=true` | `/api/*` requests carrying Cloudflare headers are refused and logged, so the tunnel can only ever reach the admin UI. |
-| `COOKIE_SECURE=true` | The admin session cookie is only ever sent over HTTPS. |
 
 ### 1. Relay host: ports and firewall
 
@@ -275,7 +279,8 @@ To run locally with the console backend:
 
 ```bash
 ADMIN_PASSWORD=dev SECRET_KEY=$(python3 -c "print('x'*40)") MAIL_FROM=notify@thetruesource.com \
-  MAIL_BACKEND=console DB_PATH=./data/dev.db .venv/bin/uvicorn app.main:_default_app --factory --reload
+  MAIL_BACKEND=console DB_PATH=./data/dev.db SUBMISSION_ENABLED=false .venv/bin/python -m app.serve
+# → https://localhost:8000/admin (self-signed cert generated in ./data/tls)
 ```
 
 ## Layout

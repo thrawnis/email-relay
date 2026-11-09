@@ -31,7 +31,6 @@ class Settings:
     # Admin UI
     admin_password: str = ""
     secret_key: str = ""
-    cookie_secure: bool = False
 
     # Storage
     db_path: str = "/data/relay.db"
@@ -63,7 +62,6 @@ class Settings:
     # Reverse proxy / transport security
     trust_proxy: bool = False        # read client IP + scheme from proxy headers (NPM, Cloudflare Tunnel)
     trusted_proxies: list[str] = field(default_factory=list)  # IPs/CIDRs allowed to set those headers; empty = any
-    require_https: bool = False      # reject requests that did not arrive over HTTPS at the proxy
     block_api_via_cloudflare: bool = True  # /api/* is LAN-only: refuse requests carrying Cloudflare headers
     smtp_ca_file: str = ""           # extra CA bundle for a self-signed SMTP server
 
@@ -72,7 +70,6 @@ class Settings:
     submission_hostname: str = ""
 
     # TLS for the relay's own listeners (HTTPS port and SMTP submission)
-    http_tls: bool = False               # serve the HTTP port over HTTPS (set by app/serve.py)
     tls_cert: str = ""                   # PEM fullchain; empty = auto-generated self-signed cert in /data/tls
     tls_key: str = ""
 
@@ -81,6 +78,9 @@ class Settings:
     submission_bind: str = "0.0.0.0"
     submission_starttls_port: int = 587  # 0 = disabled
     submission_tls_port: int = 465       # 0 = disabled
+
+    # Problems found while reading the environment (e.g. an attempt to turn HTTPS off)
+    config_errors: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.submission_hostname:
@@ -91,10 +91,12 @@ class Settings:
         mail_from = _env("MAIL_FROM")
         allowed = _list("MAIL_ALLOWED_FROM") or ([mail_from] if mail_from else [])
         schedule = [int(x) for x in _list("RETRY_SCHEDULE_SECONDS")] or [30, 120, 600, 1800, 3600]
+        errors = [f"{n}=false is no longer supported: the relay only runs over HTTPS. Remove {n} from .env."
+                  for n in ("HTTP_TLS", "REQUIRE_HTTPS", "COOKIE_SECURE") if _env(n) and not _bool(n, True)]
         return cls(
+            config_errors=errors,
             admin_password=_env("ADMIN_PASSWORD"),
             secret_key=_env("SECRET_KEY"),
-            cookie_secure=_bool("COOKIE_SECURE", False),
             db_path=_env("DB_PATH", "/data/relay.db"),
             log_retention_days=_int("LOG_RETENTION_DAYS", 0),
             mail_from=mail_from,
@@ -114,12 +116,10 @@ class Settings:
             max_attachment_bytes=_int("MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024),
             trust_proxy=_bool("TRUST_PROXY", False),
             trusted_proxies=_list("TRUSTED_PROXIES"),
-            require_https=_bool("REQUIRE_HTTPS", False),
             block_api_via_cloudflare=_bool("BLOCK_API_VIA_CLOUDFLARE", True),
             smtp_ca_file=_env("SMTP_CA_FILE"),
             public_hostname=_env("PUBLIC_HOSTNAME", "email-relay"),
             submission_hostname=_env("SUBMISSION_HOSTNAME") or _env("PUBLIC_HOSTNAME", "email-relay"),
-            http_tls=_bool("HTTP_TLS", True),
             tls_cert=_env("TLS_CERT"),
             tls_key=_env("TLS_KEY"),
             submission_enabled=_bool("SUBMISSION_ENABLED", True),
@@ -138,8 +138,7 @@ class Settings:
             problems.append("MAIL_FROM is not set")
         if self.mail_backend == "smtp" and not self.smtp_host:
             problems.append("SMTP_HOST is not set (MAIL_BACKEND=smtp)")
-        if self.require_https and not (self.trust_proxy or self.http_tls):
-            problems.append("REQUIRE_HTTPS=true needs TRUST_PROXY=true or HTTP_TLS=true")
+        problems += self.config_errors
         for p in self.trusted_proxies:
             try:
                 ipaddress.ip_network(p, strict=False)
@@ -174,8 +173,6 @@ class Settings:
             "max_recipients": self.max_recipients,
             "max_attachment_bytes": self.max_attachment_bytes,
             "log_retention_days": self.log_retention_days,
-            "require_https": self.require_https,
-            "http_tls": self.http_tls,
             "public_hostname": self.public_hostname,
             "submission_hostname": self.submission_hostname,
             "trusted_proxies": self.trusted_proxies,

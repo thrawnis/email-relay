@@ -77,7 +77,7 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
     app = FastAPI(title="Email Relay", lifespan=lifespan, docs_url="/api/docs", redoc_url=None,
                   openapi_url="/api/openapi.json")
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, session_cookie="relay_admin",
-                       max_age=12 * 3600, same_site="strict", https_only=settings.cookie_secure)
+                       max_age=12 * 3600, same_site="strict", https_only=True)
     app.state.db, app.state.worker, app.state.settings, app.state.backend = db, worker, settings, backend
     app.state.relay, app.state.submission = relay, submission
 
@@ -117,9 +117,9 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
     @app.middleware("http")
     async def transport_policy(request: Request, call_next):
         path = request.url.path
-        if path == "/healthz":  # container healthcheck talks to the app directly over HTTP
-            return await call_next(request)
-        if settings.require_https and not is_https(request):
+        # HTTPS only. The listener itself is TLS-only (app/serve.py); behind NPM/cloudflared the
+        # client's original scheme comes from X-Forwarded-Proto, which must also be https.
+        if not is_https(request):
             log.warning("Refused plain-HTTP request %s %s from %s", request.method, path, client_ip(request))
             if request.method == "POST" and path == "/api/send":
                 db.insert_message(key_id=None, app_name="(plain HTTP)", from_addr=None, recipients=None,
@@ -134,8 +134,7 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
                                   error="The send API is only reachable from the internal network")
             return JSONResponse({"error": "The API is only available on the internal network"}, status_code=403)
         response = await call_next(request)
-        if settings.require_https:
-            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")

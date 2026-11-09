@@ -25,5 +25,5 @@ EXPOSE 8000 587 465
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["python", "-m", "app.healthcheck"]
 
-# HTTPS on 8000 (unless HTTP_TLS=false), SMTP submission on 587/465. Single process by design.
+# HTTPS only on 8000, SMTP submission (TLS only) on 587/465. Single process by design.
 CMD ["python", "-m", "app.serve"]
