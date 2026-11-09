@@ -1,0 +1,16 @@
+# Image is built by ./rebuild.sh (docker buildx build --load), not by `docker compose build`.
+services:
+  email-relay:
+    image: email-relay:latest
+    container_name: email-relay
+    env_file: .env
+    ports:
+      - "${RELAY_BIND:-0.0.0.0}:${RELAY_PORT:-8025}:8000"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

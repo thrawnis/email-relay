@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Email Relay</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <section id="login-view" class="hidden">
+    <form id="login-form" class="card login">
+      <h1>Email Relay</h1>
+      <label>Admin password <input type="password" id="login-password" autocomplete="current-password" required autofocus></label>
+      <button type="submit">Sign in</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </section>
+
+  <div id="app-view" class="hidden">
+    <header>
+      <h1>Email Relay</h1>
+      <nav>
+        <button data-tab="overview" class="tab active">Overview</button>
+        <button data-tab="keys" class="tab">API keys</button>
+        <button data-tab="logs" class="tab">Send log</button>
+      </nav>
+      <button id="logout" class="secondary">Sign out</button>
+    </header>
+
+    <main>
+      <!-- Overview -->
+      <section id="tab-overview" class="tab-panel">
+        <div id="stats" class="stats"></div>
+        <div class="grid2">
+          <div class="card">
+            <h2>Last 24h by app</h2>
+            <table><thead><tr><th>App</th><th>Sent</th><th>Failed/rejected</th><th>Total</th></tr></thead>
+              <tbody id="per-app"></tbody></table>
+          </div>
+          <div class="card">
+            <h2>Configuration</h2>
+            <dl id="config"></dl>
+            <h3>Send a test email</h3>
+            <form id="test-form" class="inline">
+              <input type="email" id="test-to" placeholder="you@example.com" required>
+              <button type="submit">Send test</button>
+            </form>
+            <p id="test-result" class="muted"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Keys -->
+      <section id="tab-keys" class="tab-panel hidden">
+        <div class="card">
+          <div class="row-between">
+            <h2>API keys</h2>
+            <button id="new-key-btn">New key</button>
+          </div>
+          <table>
+            <thead><tr><th>Name</th><th>Key</th><th>Limits</th><th>Allowed from</th><th>Sent 24h</th>
+              <th>Failed 24h</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+            <tbody id="keys-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Logs -->
+      <section id="tab-logs" class="tab-panel hidden">
+        <div class="card">
+          <form id="log-filters" class="filters">
+            <input type="search" id="f-q" placeholder="Search subject, recipient, error, id…">
+            <select id="f-app"><option value="">All apps</option></select>
+            <select id="f-status">
+              <option value="">Any status</option>
+              <option value="sent">sent</option>
+              <option value="queued,sending,retrying">pending</option>
+              <option value="retrying">retrying</option>
+              <option value="failed">failed</option>
+              <option value="rejected">rejected</option>
+              <option value="failed,rejected">failed + rejected</option>
+            </select>
+            <label>From <input type="date" id="f-since"></label>
+            <label>To <input type="date" id="f-until"></label>
+            <button type="submit">Filter</button>
+            <button type="button" id="f-reset" class="secondary">Reset</button>
+          </form>
+          <table class="logs">
+            <thead><tr><th>Time</th><th>App</th><th>To</th><th>Subject</th><th>Status</th><th>Tries</th><th>Error</th></tr></thead>
+            <tbody id="logs-body"></tbody>
+          </table>
+          <div class="pager">
+            <button id="prev" class="secondary">← Newer</button>
+            <span id="page-info" class="muted"></span>
+            <button id="next" class="secondary">Older →</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Key create/edit dialog -->
+  <dialog id="key-dialog">
+    <form id="key-form" method="dialog">
+      <h2 id="key-dialog-title">New API key</h2>
+      <label>App name <input id="k-name" required maxlength="100"></label>
+      <div class="grid2">
+        <label>Max per minute <input id="k-rpm" type="number" min="1" placeholder="unlimited"></label>
+        <label>Max per 24h <input id="k-rpd" type="number" min="1" placeholder="unlimited"></label>
+      </div>
+      <label>Allowed "from" addresses <small class="muted">(comma separated; user@domain or *@domain; blank = relay default list)</small>
+        <input id="k-from" placeholder="notify@thetruesource.com"></label>
+      <label>Notes <textarea id="k-notes" rows="2" maxlength="1000"></textarea></label>
+      <p id="key-error" class="error"></p>
+      <div class="row-end">
+        <button type="button" class="secondary" id="key-cancel">Cancel</button>
+        <button type="submit" id="key-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- One-time key display -->
+  <dialog id="secret-dialog">
+    <h2>API key created</h2>
+    <p>Copy this key now. <strong>It will not be shown again</strong> — only its hash is stored.</p>
+    <div class="secret"><code id="secret-value"></code><button id="secret-copy" class="secondary">Copy</button></div>
+    <div class="row-end"><button id="secret-close">I've saved it</button></div>
+  </dialog>
+
+  <!-- Message detail -->
+  <dialog id="msg-dialog" class="wide">
+    <div class="row-between"><h2>Message</h2><button id="msg-close" class="secondary">Close</button></div>
+    <div id="msg-body"></div>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

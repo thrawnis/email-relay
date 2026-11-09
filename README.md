@@ -1,0 +1,174 @@
+# Email Relay
+
+A small, self-hosted outbound email relay for internal apps — a lightweight alternative to SendGrid/Mailgun.
+
+The relay holds the **one real set of sending credentials** (for `notify@thetruesource.com`) and gives each app
+its **own virtual API key**. Apps call `POST /api/send` with their key; the relay queues the message,
+delivers it through the real backend with retry/backoff, and logs every attempt.
+
+```
+ app A ──key A──┐
+ app B ──key B──┼──▶  Email Relay  ──(real SMTP creds)──▶  mail provider ──▶ recipients
+ app C ──key C──┘     ├─ per-key quotas / allowed senders
+                      ├─ SQLite: keys (hashed) + send log + events
+                      └─ admin UI (password-gated)
+```
+
+## Features
+
+- **Per-app API keys**: create, rename, edit and revoke them in the admin UI. A key is shown in full **once**, when it is created. Only its SHA-256 hash is stored.
+- **`POST /api/send`** accepts to/cc/bcc, subject, text and/or HTML, reply-to and base64 attachments.
+- **Persistent queue**: each request is saved to SQLite before the API returns `202`, and a background worker delivers it. Messages survive restarts, and anything that was in flight during a crash is re-queued.
+- **Retry with backoff** on transient failures: network errors, SMTP 4xx, auth problems. The default schedule is 30s, 2m, 10m, 30m, 1h, with up to 5 attempts. Permanent failures (SMTP 5xx) are not retried. An admin can re-queue a failed message.
+- **Every attempt is logged**, including rejected ones: bad or revoked key, validation error, quota exceeded, sender not allowed. Each log entry records the timestamp, app, recipients, subject, status, attempts, error, Message-ID and client IP, plus a per-message event timeline.
+- **Log search and filter**: free text (subject, recipient, error, id), app, status and date range.
+- **Optional per-key limits**: max messages per minute and/or per 24h. Leave them blank for no limit.
+- **Optional per-key sender restriction**: a list of allowed `from` addresses or `*@domain` patterns, checked on top of the relay-wide `MAIL_ALLOWED_FROM`.
+- **Pluggable delivery backend**: SMTP is built in, plus a `console` backend for testing. See [Adding a provider API backend](#adding-a-provider-api-backend).
+- **Privacy**: message bodies and attachments are kept only until delivery, then dropped. Metadata is kept for `LOG_RETENTION_DAYS` (90 by default).
+
+## Setup
+
+```bash
+git clone <this repo> email-relay && cd email-relay
+cp .env.example .env
+```
+
+Edit `.env` and set at least:
+
+- `ADMIN_PASSWORD`
+- `SECRET_KEY` (generate it with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`)
+- `MAIL_FROM` and the `SMTP_*` settings for `notify@thetruesource.com`
+
+`.env` is git-ignored, so the real credentials stay on the server only.
+
+Then build and start:
+
+```bash
+./rebuild.sh --force
+```
+
+The admin UI is at `http://<host>:8025/admin` (change the port with `RELAY_PORT`). Put it behind your reverse proxy / HTTPS
+and set `COOKIE_SECURE=true` (and `TRUST_PROXY=true` if the proxy sets `X-Forwarded-For`).
+
+To try it without sending real mail, set `MAIL_BACKEND=console`. Messages are then printed to `docker compose logs` instead of being sent.
+
+### `rebuild.sh`
+
+```bash
+./rebuild.sh           # deploy if anything changed
+./rebuild.sh --force   # always rebuild + restart
+```
+
+1. Checks out `main` and runs `git pull`, recording the commit SHA before and after.
+2. If nothing changed, it exits without rebuilding (unless `--force` is passed).
+3. It also catches stale containers: it reads the `git_sha` label of the running container's image. If that label doesn't match `HEAD`, or the container isn't running, it rebuilds anyway.
+4. It builds with `docker buildx build --tag email-relay:latest --build-arg GIT_SHA=<sha> --load .`, not `docker compose build`. The Dockerfile bakes the SHA in as `LABEL git_sha=...`.
+5. It restarts with `docker compose down && docker compose up -d --no-build`, then waits for the healthcheck to pass.
+
+There is no self-restart handoff: the relay never redeploys itself from inside its own container. If you later add it to Deployment Helper as an ordinary sibling app, this script works as is.
+
+### Data and backups
+
+Everything lives in `./data/relay.db` (SQLite, WAL mode), which is bind-mounted to `/data` in the container.
+To back up while the relay is running:
+
+```bash
+docker exec email-relay python -c "import sqlite3; s=sqlite3.connect('/data/relay.db'); d=sqlite3.connect('/data/backup.db'); s.backup(d)"
+```
+
+Run **one** container with **one** uvicorn worker. The delivery queue runs inside the app process, and that is already set in the Dockerfile.
+
+## Sending email from an app
+
+Authenticate with `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+
+```bash
+curl -X POST https://relay.internal/api/send \
+  -H "Authorization: Bearer erk_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+        "to": ["alice@example.com"],
+        "subject": "Your invoice",
+        "text": "Plain-text body",
+        "html": "<p>HTML body</p>"
+      }'
+# 202 {"id": "3f2c...", "status": "queued"}
+```
+
+| Field         | Type                     | Notes                                                                 |
+|---------------|--------------------------|-----------------------------------------------------------------------|
+| `to`          | string or list, required | Max `MAX_RECIPIENTS` total across to/cc/bcc (default 50)              |
+| `cc`, `bcc`   | string or list           |                                                                       |
+| `subject`     | string, required         |                                                                       |
+| `text`        | string                   | `text` and/or `html` required                                         |
+| `html`        | string                   | Sent as `multipart/alternative` with `text`                           |
+| `from`        | email                    | Defaults to `MAIL_FROM`; must be allowed globally and for the key     |
+| `from_name`   | string                   | Display name; defaults to `MAIL_FROM_NAME`                            |
+| `reply_to`    | email                    |                                                                       |
+| `attachments` | list                     | `[{"filename", "content" (base64), "content_type"}]`, total ≤ `MAX_ATTACHMENT_BYTES` |
+
+Python example:
+
+```python
+import base64, requests
+requests.post("https://relay.internal/api/send", headers={"Authorization": f"Bearer {KEY}"}, json={
+    "to": "alice@example.com", "subject": "Report", "text": "See attached.",
+    "attachments": [{"filename": "report.pdf", "content_type": "application/pdf",
+                     "content": base64.b64encode(open("report.pdf", "rb").read()).decode()}],
+}, timeout=30).raise_for_status()
+```
+
+**Responses:**
+
+| Status | Meaning |
+|--------|---------|
+| `202`  | Queued |
+| `400`/`422` | Invalid request |
+| `401`  | Missing or unknown key |
+| `403`  | Key revoked, or sender not allowed |
+| `413`  | Too large |
+| `429`  | Over the per-key limit (`Retry-After: 60`) |
+
+Every non-202 response is also logged as `rejected`.
+
+**Delivery status:** `GET /api/messages/{id}` (with the same key) returns `queued`, `sending`, `retrying`, `sent` or `failed`, along with the number of attempts and the last error.
+
+Interactive API docs are at `/api/docs`.
+
+## Adding a provider API backend
+
+`app/backends/base.py` defines the interface. To add one (for example Postmark, Resend or SES):
+
+1. Subclass `Backend` and implement `send(payload, from_addr, from_name) -> SendResult`. It POSTs the payload to the provider.
+2. Raise `TransientError` for 429/5xx/network errors and `PermanentError` for 4xx validation errors.
+3. Register it in `app/backends/__init__.py:get_backend`, and add its settings to `config.py` and `.env.example`.
+
+## Development
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest
+```
+
+To run locally with the console backend:
+
+```bash
+ADMIN_PASSWORD=dev SECRET_KEY=$(python3 -c "print('x'*40)") MAIL_FROM=notify@thetruesource.com \
+  MAIL_BACKEND=console DB_PATH=./data/dev.db .venv/bin/uvicorn app.main:_default_app --factory --reload
+```
+
+## Layout
+
+```
+app/
+  main.py        FastAPI app: /api/send, /api/messages/{id}, admin API, static UI
+  worker.py      background delivery loop (claim → send → sent | retry | failed)
+  db.py          SQLite schema + queries
+  schemas.py     request validation
+  security.py    key generation/hashing, sender matching, login throttling
+  config.py      env-var settings
+  backends/      smtp.py, console.py, base.py (interface + MIME builder)
+  static/        admin UI (vanilla JS)
+tests/           pytest suite (fake backend)
+```
