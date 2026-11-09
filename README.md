@@ -25,7 +25,7 @@ delivers it through the real backend with retry/backoff, and logs every attempt.
 - **Optional per-key limits**: max messages per minute and/or per 24h. Leave them blank for no limit.
 - **Optional per-key sender restriction**: a list of allowed `from` addresses or `*@domain` patterns, checked on top of the relay-wide `MAIL_ALLOWED_FROM`.
 - **Pluggable delivery backend**: SMTP is built in, plus a `console` backend for testing. See [Adding a provider API backend](#adding-a-provider-api-backend).
-- **Privacy**: message bodies and attachments are kept only until delivery, then dropped. Metadata is kept for `LOG_RETENTION_DAYS` (90 by default).
+- **Privacy**: message bodies and attachments are kept only until delivery, then dropped. Metadata is kept forever by default; set `LOG_RETENTION_DAYS` to purge entries older than N days.
 
 ## Setup
 

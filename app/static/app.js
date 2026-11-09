@@ -65,7 +65,7 @@ async function loadOverview() {
     ["Backend", cfg.backend], ["Default from", cfg.mail_from_name ? `${cfg.mail_from_name} <${cfg.mail_from}>` : cfg.mail_from],
     ["Allowed from", cfg.mail_allowed_from.join(", ")], ["Max attempts", cfg.max_attempts],
     ["Retry delays (s)", cfg.retry_schedule_seconds.join(", ")], ["Max recipients", cfg.max_recipients],
-    ["Max attachments", `${(cfg.max_attachment_bytes / 1048576).toFixed(1)} MB`], ["Log retention", `${cfg.log_retention_days} days`],
+    ["Max attachments", `${(cfg.max_attachment_bytes / 1048576).toFixed(1)} MB`], ["Log retention", cfg.log_retention_days > 0 ? `${cfg.log_retention_days} days` : "unlimited"],
   ];
   $("#config").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
 }

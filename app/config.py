@@ -34,7 +34,7 @@ class Settings:
 
     # Storage
     db_path: str = "/data/relay.db"
-    log_retention_days: int = 90
+    log_retention_days: int = 0  # 0 = keep forever
 
     # Sender identity
     mail_from: str = ""
@@ -72,7 +72,7 @@ class Settings:
             secret_key=_env("SECRET_KEY"),
             cookie_secure=_bool("COOKIE_SECURE", False),
             db_path=_env("DB_PATH", "/data/relay.db"),
-            log_retention_days=_int("LOG_RETENTION_DAYS", 90),
+            log_retention_days=_int("LOG_RETENTION_DAYS", 0),
             mail_from=mail_from,
             mail_from_name=_env("MAIL_FROM_NAME"),
             mail_allowed_from=allowed,
