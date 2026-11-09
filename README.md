@@ -33,7 +33,7 @@ delivers it through the real backend with retry/backoff, and logs every attempt.
 ## Setup
 
 ```bash
-git clone https://github.com/<your-user>/email-relay.git email-relay && cd email-relay
+git clone https://github.com/thrawnis/email-relay.git email-relay && cd email-relay
 cp .env.example .env
 ```
 
