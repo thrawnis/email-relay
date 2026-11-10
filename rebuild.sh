@@ -69,8 +69,16 @@ docker buildx build \
   --load \
   .
 
-# Restart. A plain down/up is enough: the relay never redeploys itself from inside its own container.
+# Validate .env with the new image before touching the running container.
+# `compose run` reads .env exactly like the real service does; no ports are published.
 mkdir -p data
+log "Checking configuration with the new image"
+if ! docker compose run --rm --no-deps -T email-relay python -m app.checkconfig; then
+  log "ERROR: fix .env and re-run ./rebuild.sh. The running container (if any) was left untouched."
+  exit 1
+fi
+
+# Restart. A plain down/up is enough: the relay never redeploys itself from inside its own container.
 log "Restarting"
 docker compose down
 docker compose up -d --no-build

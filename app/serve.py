@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import logging
+import sys
 
 import uvicorn
 
+from .checkconfig import main as check_config
 from .config import Settings
 from .tls import resolve_tls_files
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if check_config() != 0:  # clear list of problems instead of a traceback
+        sys.exit(1)
     settings = Settings.from_env()
     cert, key = resolve_tls_files(settings)
     tls = {"ssl_certfile": cert, "ssl_keyfile": key}
