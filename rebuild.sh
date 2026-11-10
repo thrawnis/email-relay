@@ -43,10 +43,10 @@ fi
 
 # 3. Stale-container detection: compare the running container's baked-in git_sha label to HEAD.
 RUNNING_SHA=""
-if docker inspect "$CONTAINER" >/dev/null 2>&1; then
-  RUNNING_IMAGE="$(docker inspect --format '{{.Image}}' "$CONTAINER")"
+if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+  RUNNING_IMAGE="$(docker container inspect --format '{{.Image}}' "$CONTAINER")"
   RUNNING_SHA="$(docker image inspect --format '{{ index .Config.Labels "git_sha" }}' "$RUNNING_IMAGE" 2>/dev/null || true)"
-  RUNNING_STATE="$(docker inspect --format '{{.State.Status}}' "$CONTAINER")"
+  RUNNING_STATE="$(docker container inspect --format '{{.State.Status}}' "$CONTAINER")"
   log "Running container: state=$RUNNING_STATE git_sha=${RUNNING_SHA:-<none>}"
 else
   log "No existing '$CONTAINER' container."
@@ -77,7 +77,7 @@ docker compose up -d --no-build
 
 # Quick health check.
 for i in $(seq 1 20); do
-  STATUS="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER" 2>/dev/null || echo missing)"
+  STATUS="$(docker container inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER" 2>/dev/null || echo missing)"
   if [[ "$STATUS" == "healthy" ]]; then
     log "Up and healthy at ${AFTER:0:12}"
     exit 0
