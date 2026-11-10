@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS messages (
     has_html          INTEGER NOT NULL DEFAULT 0,
     attachment_count  INTEGER NOT NULL DEFAULT 0,
     size_bytes        INTEGER NOT NULL DEFAULT 0,
-    status            TEXT    NOT NULL, -- queued | sending | retrying | sent | failed | rejected
+    status            TEXT    NOT NULL, -- queued | sending | retrying | sent | partial | failed | rejected
     attempts          INTEGER NOT NULL DEFAULT 0,
     next_attempt_at   REAL,
     error             TEXT,
@@ -66,7 +66,7 @@ CREATE INDEX IF NOT EXISTS ix_events_msg ON message_events(message_id, ts);
 """
 
 PENDING_STATUSES = ("queued", "retrying")
-FINAL_STATUSES = ("sent", "failed", "rejected")
+FINAL_STATUSES = ("sent", "partial", "failed", "rejected")
 
 
 def _row(r: sqlite3.Row | None) -> dict | None:
@@ -144,7 +144,7 @@ class Database:
             SELECT k.*,
               (SELECT COUNT(*) FROM messages m WHERE m.key_id = k.id AND m.status = 'sent'
                  AND m.created_at >= ?) AS sent_24h,
-              (SELECT COUNT(*) FROM messages m WHERE m.key_id = k.id AND m.status IN ('failed','rejected')
+              (SELECT COUNT(*) FROM messages m WHERE m.key_id = k.id AND m.status IN ('failed','rejected','partial')
                  AND m.created_at >= ?) AS failed_24h,
               (SELECT COUNT(*) FROM messages m WHERE m.key_id = k.id) AS total
             FROM api_keys k ORDER BY k.revoked_at IS NOT NULL, k.name COLLATE NOCASE
@@ -237,11 +237,15 @@ class Database:
                 out.append(d)
             return out
 
-    def mark_sent(self, message_id: str, provider_id: str | None, detail: str | None = None) -> None:
+    def mark_sent(self, message_id: str, provider_id: str | None, detail: str | None = None,
+                  partial_error: str | None = None) -> None:
+        """'sent', or 'partial' when some recipients were refused (error lists which)."""
+        status = "partial" if partial_error else "sent"
         with self.tx() as c:
-            c.execute("UPDATE messages SET status='sent', provider_id=?, error=NULL, next_attempt_at=NULL,"
-                      " payload=NULL, updated_at=? WHERE id=?", (provider_id, time.time(), message_id))
-            self._event(c, message_id, "sent", detail)
+            c.execute("UPDATE messages SET status=?, provider_id=?, error=?, next_attempt_at=NULL,"
+                      " payload=NULL, updated_at=? WHERE id=?",
+                      (status, provider_id, partial_error, time.time(), message_id))
+            self._event(c, message_id, status, detail)
 
     def mark_retry(self, message_id: str, error: str, next_at: float) -> None:
         with self.tx() as c:
@@ -328,7 +332,7 @@ class Database:
         pending = self.query_one(
             "SELECT COUNT(*) AS n FROM messages WHERE status IN ('queued','retrying','sending')")["n"]
         per_app = self.query(
-            "SELECT app_name, SUM(status='sent') AS sent, SUM(status IN ('failed','rejected')) AS failed,"
+            "SELECT app_name, SUM(status='sent') AS sent, SUM(status IN ('failed','rejected','partial')) AS failed,"
             " COUNT(*) AS total FROM messages WHERE created_at >= ? GROUP BY app_name ORDER BY total DESC",
             (now - 86400,))
         return {"by_status": by_status, "pending": pending, "per_app_24h": per_app}
@@ -340,9 +344,9 @@ class Database:
     def purge_older_than(self, cutoff: float) -> int:
         with self.tx() as c:
             c.execute("DELETE FROM message_events WHERE message_id IN"
-                      " (SELECT id FROM messages WHERE created_at < ? AND status IN ('sent','failed','rejected'))",
+                      " (SELECT id FROM messages WHERE created_at < ? AND status IN ('sent','partial','failed','rejected'))",
                       (cutoff,))
-            cur = c.execute("DELETE FROM messages WHERE created_at < ? AND status IN ('sent','failed','rejected')",
+            cur = c.execute("DELETE FROM messages WHERE created_at < ? AND status IN ('sent','partial','failed','rejected')",
                             (cutoff,))
             return cur.rowcount
 

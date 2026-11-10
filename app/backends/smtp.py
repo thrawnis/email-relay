@@ -67,11 +67,11 @@ class SMTPBackend(Backend):
         except (smtplib.SMTPException, OSError, socket.timeout, ssl.SSLError) as e:
             raise TransientError(f"{type(e).__name__}: {e}") from e
 
-        detail = None
         if refused:
-            detail = "Some recipients refused: " + "; ".join(
-                f"{r}: {c} {_decode(m)}" for r, (c, m) in refused.items())
-        return SendResult(provider_id=message_id, detail=detail)
+            err = (f"Delivered to {len(rcpts) - len(refused)} of {len(rcpts)} recipients; refused: "
+                   + "; ".join(f"{r}: {c} {_decode(m)}" for r, (c, m) in refused.items()))
+            return SendResult(provider_id=message_id, detail=err, partial_error=err)
+        return SendResult(provider_id=message_id, detail="Accepted by the upstream SMTP server")
 
 
 def _decode(v) -> str:

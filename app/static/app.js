@@ -51,10 +51,11 @@ document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () 
 // ---------------------------------------------------------------- overview
 async function loadOverview() {
   const [stats, cfg] = await Promise.all([api("/admin/api/stats"), api("/admin/api/config")]);
+  $("#test-banner").classList.toggle("hidden", cfg.mail_backend !== "console");
   const d = stats.by_status["24h"] || {}, w = stats.by_status["7d"] || {};
   const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
   const tiles = [
-    ["Sent (24h)", d.sent || 0], ["Failed (24h)", d.failed || 0], ["Rejected (24h)", d.rejected || 0],
+    ["Sent (24h)", d.sent || 0], ["Partial (24h)", d.partial || 0], ["Failed (24h)", d.failed || 0], ["Rejected (24h)", d.rejected || 0],
     ["Pending now", stats.pending], ["Total (7d)", sum(w)],
   ];
   $("#stats").innerHTML = tiles.map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`).join("");

@@ -88,6 +88,10 @@ class Worker:
                 log.info("Message %s attempt %d failed (%s); retrying in %ds", mid, attempt, err, delay)
                 self.db.mark_retry(mid, err, time.time() + delay)
             return
+        if result.partial_error:
+            log.warning("Message %s only partially delivered: %s", mid, result.partial_error)
+            self.db.mark_sent(mid, result.provider_id, result.detail, partial_error=result.partial_error)
+            return
         self.db.mark_sent(mid, result.provider_id, result.detail)
         log.info("Message %s sent (%s)", mid, result.provider_id)
 

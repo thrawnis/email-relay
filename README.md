@@ -229,7 +229,20 @@ requests.post("https://emailrelay.example.com/api/send", headers={"Authorization
 
 Every non-202 response is also logged as `rejected`.
 
-**Delivery status:** `GET /api/messages/{id}` (with the same key) returns `queued`, `sending`, `retrying`, `sent` or `failed`, along with the number of attempts and the last error.
+**Delivery status:** `GET /api/messages/{id}` (with the same key) returns the status, the number of attempts and the last error.
+
+| Status | Meaning |
+|---|---|
+| `queued` / `sending` / `retrying` | Not finished yet |
+| `sent` | The upstream SMTP server **accepted** the message for every recipient |
+| `partial` | Accepted for some recipients, refused for others; `error` lists which |
+| `failed` | Permanently refused (5xx), or still failing after `MAX_ATTEMPTS` |
+| `rejected` | Refused by the relay itself (bad key, invalid request, limit, sender not allowed) |
+
+`sent` means the upstream server took responsibility for the message. If it later bounces (unknown mailbox, spam
+filtering, sender not permitted), the bounce goes back to the sender's mailbox (`MAIL_FROM`), not to the relay. Check that
+mailbox when a message shows `sent` but never arrived. With `MAIL_BACKEND=console`, every message shows `sent` but nothing is
+delivered; the admin UI shows a test-mode banner in that case.
 
 Interactive API docs are at `/api/docs`.
 

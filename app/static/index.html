@@ -17,6 +17,7 @@
   </section>
 
   <div id="app-view" class="hidden">
+    <div id="test-banner" class="banner hidden">Test mode: MAIL_BACKEND=console. Messages are logged as "sent" but NOTHING is actually delivered.</div>
     <header>
       <h1>Email Relay</h1>
       <nav>
@@ -74,11 +75,12 @@
             <select id="f-status">
               <option value="">Any status</option>
               <option value="sent">sent</option>
+              <option value="partial">partial (some recipients refused)</option>
               <option value="queued,sending,retrying">pending</option>
               <option value="retrying">retrying</option>
               <option value="failed">failed</option>
               <option value="rejected">rejected</option>
-              <option value="failed,rejected">failed + rejected</option>
+              <option value="failed,rejected,partial">all problems</option>
             </select>
             <label>From <input type="date" id="f-since"></label>
             <label>To <input type="date" id="f-until"></label>
@@ -86,7 +88,7 @@
             <button type="button" id="f-reset" class="secondary">Reset</button>
           </form>
           <table class="logs">
-            <thead><tr><th>Time</th><th>App</th><th>Via</th><th>To</th><th>Subject</th><th>Status</th><th>Tries</th><th>Error</th></tr></thead>
+            <thead><tr><th>Time</th><th>App</th><th>Via</th><th>To</th><th>Subject</th><th title="sent = accepted by the upstream mail server. Later bounces go to the sender mailbox, not the relay.">Status ⓘ</th><th>Tries</th><th>Error</th></tr></thead>
             <tbody id="logs-body"></tbody>
           </table>
           <div class="pager">

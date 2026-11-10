@@ -34,6 +34,8 @@ class PermanentError(Exception):
 class SendResult:
     provider_id: str | None = None
     detail: str | None = None
+    # Set when the server accepted the message for some recipients but refused others
+    partial_error: str | None = None
 
 
 class Backend:
