@@ -157,8 +157,8 @@ put the CA certificate in `./data/` and set `SMTP_CA_FILE=/data/<name>.crt`. Don
 ./rebuild.sh --force   # always rebuild + restart
 ```
 
-1. Checks out `main` and runs `git pull`, recording the commit SHA before and after.
-2. If nothing changed, it exits without rebuilding (unless `--force` is passed).
+1. Fetches `origin/main` and hard-resets to it, **discarding** any local edits, local commits and untracked files in the checkout. Git-ignored files (`.env`, `data/`) are kept. It records the commit SHA before and after. If `rebuild.sh` itself changed, it restarts itself so the new version runs.
+2. If nothing changed (and no local changes had to be discarded), it exits without rebuilding, unless `--force` is passed.
 3. It also catches stale containers: it reads the `git_sha` label of the running container's image. If that label doesn't match `HEAD`, or the container isn't running, it rebuilds anyway.
 4. It builds with `docker buildx build --tag email-relay:latest --build-arg GIT_SHA=<sha> --load .`, not `docker compose build`. The Dockerfile bakes the SHA in as `LABEL git_sha=...`.
 5. It restarts with `docker compose down && docker compose up -d --no-build`, then waits for the healthcheck to pass.

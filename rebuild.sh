@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Pull latest code, rebuild the image if anything changed, and restart the relay.
+# Discard any local changes to tracked files, reset to the latest origin/main, rebuild the image
+# if anything changed, and restart the relay. .env and data/ (git-ignored) are never touched.
 #
-#   ./rebuild.sh           # rebuild only if main moved or the running container is stale
+#   ./rebuild.sh           # rebuild only if main moved, local changes were discarded, or the container is stale
 #   ./rebuild.sh --force   # always rebuild + restart
 set -euo pipefail
 
@@ -20,12 +21,33 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-# 1. Pull latest code, recording the commit before and after.
-git checkout "$BRANCH"
-BEFORE="$(git rev-parse HEAD)"
-git pull --ff-only origin "$BRANCH"
+# Everything below lives in a function so bash has parsed it all before git rewrites this very file.
+main() {
+
+# 1. Always take the latest origin/main, discarding local changes.
+#    Tracked files are reset, local commits on main are dropped, and untracked non-ignored files are
+#    removed. Ignored files (.env, data/) are kept.
+BEFORE="$(git rev-parse HEAD 2>/dev/null || echo none)"
+SCRIPT_BEFORE="$(sha256sum "$0" | cut -d' ' -f1)"
+DIRTY="$(git status --porcelain --untracked-files=normal 2>/dev/null || true)"
+if [[ -n "$DIRTY" ]]; then
+  log "Discarding local changes:"
+  echo "$DIRTY" | sed 's/^/    /'
+fi
+git fetch --prune origin "$BRANCH"
+git checkout --force -B "$BRANCH" "origin/$BRANCH"
+git reset --hard "origin/$BRANCH"
+git clean -fd
 AFTER="$(git rev-parse HEAD)"
 log "HEAD before=${BEFORE:0:12} after=${AFTER:0:12}"
+
+# If this script itself was updated, restart it so the rest of this run uses the new version.
+if [[ "$(sha256sum "$0" | cut -d' ' -f1)" != "$SCRIPT_BEFORE" && -z "${REBUILD_REEXEC:-}" ]]; then
+  log "rebuild.sh was updated; restarting with the new version"
+  REBUILD_REEXEC=1 exec "$0" "$@"
+fi
+# A discarded local change means the running image may not match the commit label: rebuild.
+[[ -n "$DIRTY" ]] && FORCE=1
 
 # Preflight: fail before building/stopping anything if the config can't work.
 # Settings present in .env.example but missing from .env (new settings added by an update).
@@ -98,3 +120,8 @@ done
 log "WARNING: container status is '$STATUS'. Recent logs:"
 docker compose logs --tail 40 email-relay || true
 exit 1
+
+}
+
+main "$@"
+exit $?
