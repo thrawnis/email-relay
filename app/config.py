@@ -56,9 +56,9 @@ class Settings:
     retry_schedule: list[int] = field(default_factory=lambda: [30, 120, 600, 1800, 3600])
 
     # Rate limits (messages accepted). A key's own setting overrides the default; 0 = unlimited.
-    default_rate_per_minute: int = 60
-    default_rate_per_day: int = 2000
-    global_rate_per_minute: int = 300   # all keys combined; protects the upstream account. 0 = off
+    default_rate_per_minute: int = 5
+    default_rate_per_day: int = 30
+    global_rate_per_minute: int = 200   # all keys combined; protects the upstream account. 0 = off
 
     # Request limits
     max_recipients: int = 50
@@ -119,9 +119,9 @@ class Settings:
             max_attempts=max(1, _int("MAX_ATTEMPTS", 5)),
             send_concurrency=max(1, _int("SEND_CONCURRENCY", 2)),
             retry_schedule=schedule,
-            default_rate_per_minute=max(0, _int("DEFAULT_RATE_PER_MINUTE", 60)),
-            default_rate_per_day=max(0, _int("DEFAULT_RATE_PER_DAY", 2000)),
-            global_rate_per_minute=max(0, _int("GLOBAL_RATE_PER_MINUTE", 300)),
+            default_rate_per_minute=max(0, _int("DEFAULT_RATE_PER_MINUTE", 5)),
+            default_rate_per_day=max(0, _int("DEFAULT_RATE_PER_DAY", 30)),
+            global_rate_per_minute=max(0, _int("GLOBAL_RATE_PER_MINUTE", 200)),
             max_recipients=_int("MAX_RECIPIENTS", 50),
             max_attachment_bytes=_int("MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024),
             trust_proxy=_bool("TRUST_PROXY", False),
