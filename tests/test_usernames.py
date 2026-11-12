@@ -82,3 +82,15 @@ def test_timeseries_endpoint(client):
     assert [k["username"] for k in r["keys"]] == ["alpha", "beta"]
     assert client.get("/admin/api/stats/timeseries?since=10&until=5").status_code == 422
     assert client.get("/admin/api/stats/timeseries?since=0&until=999999999").status_code == 422
+
+
+def test_assets_are_versioned_and_revalidated(client):
+    import re
+    html = client.get("/admin").text
+    versions = re.findall(r'/static/(?:style\.css|charts\.js|app\.js)\?v=([0-9a-f]{12})', html)
+    assert len(versions) == 3 and len(set(versions)) == 1 and "{{v}}" not in html
+    assert 'data-tab="charts"' not in html and 'id="charts-section"' in html
+    assert client.get("/admin").headers["cache-control"] == "no-store"
+    r = client.get(f"/static/app.js?v={versions[0]}")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+    assert "etag" in r.headers

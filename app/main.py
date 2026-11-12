@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import ipaddress
 import json
 import logging
@@ -12,7 +13,7 @@ from email.parser import BytesParser
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.middleware.sessions import SessionMiddleware
@@ -386,11 +387,26 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
     async def root():
         return RedirectResponse("/admin")
 
+    # Asset URLs carry a hash of the static files, so a browser or CDN (Cloudflare caches .js/.css by default)
+    # can never pair a new page with an old script, and any update is picked up at once.
+    digest = hashlib.sha256()
+    for f in sorted(STATIC_DIR.glob("*")):
+        if f.is_file() and f.name != "index.html":
+            digest.update(f.name.encode() + f.read_bytes())
+    asset_version = digest.hexdigest()[:12]
+    index_html = (STATIC_DIR / "index.html").read_text().replace("{{v}}", asset_version)
+
     @app.get("/admin", include_in_schema=False)
     async def admin_page():
-        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-store"})
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    class RevalidatedStatic(StaticFiles):
+        async def get_response(self, path, scope):
+            resp = await super().get_response(path, scope)
+            resp.headers["Cache-Control"] = "no-cache"  # always revalidate (ETag), never serve stale
+            return resp
+
+    app.mount("/static", RevalidatedStatic(directory=STATIC_DIR), name="static")
     return app
 
 

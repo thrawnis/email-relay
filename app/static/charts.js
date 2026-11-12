@@ -343,7 +343,7 @@
   }
 
   function render() {
-    if (!state.raw || !$("#tab-charts") || $("#tab-charts").classList.contains("hidden")) return;
+    if (!state.raw || $("#tab-overview").classList.contains("hidden")) return;
     const agg = aggregate();
     state.agg = agg;
     $("#c-range-label").textContent = `${fmtLong(state.from)} – ${fmtLong(state.to)} · ${agg.days.length} day${agg.days.length === 1 ? "" : "s"} · ${Intl.DateTimeFormat().resolvedOptions().timeZone}`;

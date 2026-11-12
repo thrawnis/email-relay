@@ -98,3 +98,6 @@ button.legend-item { cursor: pointer; } button.legend-item:hover { background: v
 .legend-total { color: var(--muted); font-variant-numeric: tabular-nums; }
 .small { font-size: 12px; margin: 0 0 4px; }
 details.card summary { cursor: pointer; font-weight: 600; }
+
+.section-title { font-size: 16px; margin: 24px 0 8px; }
+#charts-section { margin-top: 8px; }

@@ -44,12 +44,13 @@ $("#logout").addEventListener("click", async () => { await api("/admin/api/logou
 function switchTab(name) {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("hidden", p.id !== `tab-${name}`));
-  ({ overview: loadOverview, keys: loadKeys, charts: () => window.loadCharts(), logs: loadLogs })[name]();
+  ({ overview: loadOverview, keys: loadKeys, logs: loadLogs })[name]();
 }
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
 // ---------------------------------------------------------------- overview
 async function loadOverview() {
+  if (typeof window.loadCharts === "function") window.loadCharts(); // usage charts at the bottom of this page
   const [stats, cfg] = await Promise.all([api("/admin/api/stats"), api("/admin/api/config")]);
   $("#test-banner").classList.toggle("hidden", cfg.mail_backend !== "console");
   const d = stats.by_status["24h"] || {}, w = stats.by_status["7d"] || {};
