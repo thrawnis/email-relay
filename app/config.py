@@ -55,6 +55,11 @@ class Settings:
     send_concurrency: int = 2
     retry_schedule: list[int] = field(default_factory=lambda: [30, 120, 600, 1800, 3600])
 
+    # Rate limits (messages accepted). A key's own setting overrides the default; 0 = unlimited.
+    default_rate_per_minute: int = 60
+    default_rate_per_day: int = 2000
+    global_rate_per_minute: int = 300   # all keys combined; protects the upstream account. 0 = off
+
     # Request limits
     max_recipients: int = 50
     max_attachment_bytes: int = 10 * 1024 * 1024
@@ -114,6 +119,9 @@ class Settings:
             max_attempts=max(1, _int("MAX_ATTEMPTS", 5)),
             send_concurrency=max(1, _int("SEND_CONCURRENCY", 2)),
             retry_schedule=schedule,
+            default_rate_per_minute=max(0, _int("DEFAULT_RATE_PER_MINUTE", 60)),
+            default_rate_per_day=max(0, _int("DEFAULT_RATE_PER_DAY", 2000)),
+            global_rate_per_minute=max(0, _int("GLOBAL_RATE_PER_MINUTE", 300)),
             max_recipients=_int("MAX_RECIPIENTS", 50),
             max_attachment_bytes=_int("MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024),
             trust_proxy=_bool("TRUST_PROXY", False),
@@ -176,6 +184,9 @@ class Settings:
             "smtp_username": self.smtp_username,
             "max_attempts": self.max_attempts,
             "retry_schedule_seconds": self.retry_schedule,
+            "default_rate_per_minute": self.default_rate_per_minute,
+            "default_rate_per_day": self.default_rate_per_day,
+            "global_rate_per_minute": self.global_rate_per_minute,
             "max_recipients": self.max_recipients,
             "max_attachment_bytes": self.max_attachment_bytes,
             "log_retention_days": self.log_retention_days,

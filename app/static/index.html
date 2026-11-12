@@ -177,9 +177,10 @@
       <label>App name <input id="k-name" required maxlength="100">
         <small class="muted">SMTP username: <code id="k-username-preview">app</code> (lowercase, accents and spaces simplified)</small></label>
       <div class="grid2">
-        <label>Max per minute <input id="k-rpm" type="number" min="1" placeholder="unlimited"></label>
-        <label>Max per 24h <input id="k-rpd" type="number" min="1" placeholder="unlimited"></label>
+        <label>Max per minute <input id="k-rpm" type="number" min="0" placeholder="default"></label>
+        <label>Max per 24h <input id="k-rpd" type="number" min="0" placeholder="default"></label>
       </div>
+      <p class="muted small">Blank uses the relay default shown. <strong>0</strong> means unlimited. Short spikes are also capped: a third of the per-minute allowance (at least 10) may arrive within any 10 seconds.</p>
       <label>Allowed "from" addresses <small class="muted">(comma separated; user@domain or *@domain; blank = relay default list)</small>
         <input id="k-from" placeholder="notify@example.com"></label>
       <label class="check"><span><input id="k-plain" type="checkbox"> Allow unencrypted SMTP for this app</span>

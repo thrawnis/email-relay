@@ -93,8 +93,9 @@ class SendRequest(BaseModel):
 class KeyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=100)
-    rate_per_minute: int | None = Field(default=None, ge=1)
-    rate_per_day: int | None = Field(default=None, ge=1)
+    # None = use the relay default, 0 = unlimited, N = at most N messages
+    rate_per_minute: int | None = Field(default=None, ge=0, le=100000)
+    rate_per_day: int | None = Field(default=None, ge=0, le=10000000)
     allowed_from: list[str] = []
     notes: str | None = Field(default=None, max_length=1000)
     # Lets this key log in on the UNENCRYPTED SMTP port (its key and mail then cross the network in clear text)

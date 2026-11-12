@@ -137,7 +137,7 @@ def test_rate_limit(env):
     assert send(client, key).status_code == 202
     assert send(client, key).status_code == 202
     r = send(client, key)
-    assert r.status_code == 429 and r.headers["retry-after"] == "60"
+    assert r.status_code == 429 and 1 <= int(r.headers["retry-after"]) <= 60
 
 
 def test_attachments(env):

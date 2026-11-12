@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS messages (
     client_ip         TEXT,
     source            TEXT,             -- api | smtp | admin
     username          TEXT,             -- SMTP login name as typed (even when auth failed); API: the key's username
+    repeats           INTEGER NOT NULL DEFAULT 0,  -- identical rate-limit rejections folded into this row
     payload           TEXT              -- full request JSON; cleared once delivered
 );
 CREATE INDEX IF NOT EXISTS ix_messages_created ON messages(created_at);
@@ -97,6 +98,8 @@ class Database:
             self._conn.execute("ALTER TABLE messages ADD COLUMN source TEXT")
         if "username" not in cols:
             self._conn.execute("ALTER TABLE messages ADD COLUMN username TEXT")
+        if "repeats" not in cols:
+            self._conn.execute("ALTER TABLE messages ADD COLUMN repeats INTEGER NOT NULL DEFAULT 0")
         key_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(api_keys)").fetchall()}
         if "allow_plaintext_smtp" not in key_cols:
             self._conn.execute("ALTER TABLE api_keys ADD COLUMN allow_plaintext_smtp INTEGER NOT NULL DEFAULT 0")
@@ -210,13 +213,38 @@ class Database:
         with self.tx() as c:
             c.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", (time.time(), key_id))
 
-    def count_accepted_since(self, key_id: int, since: float) -> int:
-        """Messages that count toward quota: everything accepted (i.e. not rejected)."""
+    def count_accepted_since(self, key_id: int | None, since: float) -> int:
+        """Messages that count toward quota: everything accepted (i.e. not rejected). key_id None = all keys."""
+        where, params = ("key_id = ? AND ", [key_id]) if key_id is not None else ("", [])
         r = self.query_one(
-            "SELECT COUNT(*) AS n FROM messages WHERE key_id = ? AND created_at >= ? AND status != 'rejected'",
-            (key_id, since),
-        )
+            f"SELECT COUNT(*) AS n FROM messages WHERE {where}created_at >= ? AND status != 'rejected'",
+            (*params, since))
         return r["n"] if r else 0
+
+    def window_state(self, key_id: int | None, window: int, limit: int, now: float) -> tuple[int, int]:
+        """(messages in the last `window` seconds, seconds until one more may be accepted)."""
+        since = now - window
+        count = self.count_accepted_since(key_id, since)
+        if count < limit:
+            return count, 0
+        where, params = ("key_id = ? AND ", [key_id]) if key_id is not None else ("", [])
+        # the message that must age out of the window before there is room again
+        r = self.query_one(
+            f"SELECT created_at FROM messages WHERE {where}created_at >= ? AND status != 'rejected'"
+            " ORDER BY created_at LIMIT 1 OFFSET ?", (*params, since, count - limit))
+        wait = (r["created_at"] + window - now) if r else window
+        return count, max(1, int(wait) + 1)
+
+    def bump_throttled(self, key_id: int, error: str, window: int = 60) -> str | None:
+        """Collapse a flood of identical rate-limit rejections into one log row (counts the repeats)."""
+        with self.tx() as c:
+            r = c.execute(
+                "SELECT id FROM messages WHERE key_id = ? AND status = 'rejected' AND error = ? AND created_at >= ?"
+                " ORDER BY created_at DESC LIMIT 1", (key_id, error, time.time() - window)).fetchone()
+            if not r:
+                return None
+            c.execute("UPDATE messages SET repeats = repeats + 1, updated_at = ? WHERE id = ?", (time.time(), r["id"]))
+            return r["id"]
 
     # -------------------------------------------------------------- messages
     def insert_message(self, *, key_id: int | None, app_name: str, from_addr: str | None,
@@ -350,7 +378,7 @@ class Database:
         total = self.query_one(f"SELECT COUNT(*) AS n FROM messages {clause}", params)["n"]
         rows = self.query(
             f"SELECT id, created_at, updated_at, key_id, app_name, from_addr, recipients, subject, has_html,"
-            f" attachment_count, size_bytes, status, attempts, next_attempt_at, error, provider_id, client_ip, source, username"
+            f" attachment_count, size_bytes, status, attempts, next_attempt_at, error, provider_id, client_ip, source, username, repeats"
             f" FROM messages {clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (*params, limit, offset))
         for r in rows:

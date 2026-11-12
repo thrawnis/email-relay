@@ -96,7 +96,9 @@ async function loadConfig() {
   const rows = [
     ["Backend", cfg.backend], ["Default from", cfg.mail_from_name ? `${cfg.mail_from_name} <${cfg.mail_from}>` : cfg.mail_from],
     ["Allowed from", cfg.mail_allowed_from.join(", ")], ["Max attempts", cfg.max_attempts],
-    ["Retry delays (s)", cfg.retry_schedule_seconds.join(", ")], ["Max recipients", cfg.max_recipients],
+    ["Retry delays (s)", cfg.retry_schedule_seconds.join(", ")], ["Default rate limit (per key)", `${cfg.default_rate_per_minute || "unlimited"}/minute, ${cfg.default_rate_per_day || "unlimited"}/24h`],
+    ["Relay-wide rate limit", cfg.global_rate_per_minute ? `${cfg.global_rate_per_minute}/minute across all keys` : "off"],
+    ["Max recipients", cfg.max_recipients],
     ["SMTP submission", cfg.submission.enabled
       ? `${cfg.submission.running ? "running" : "NOT running"} — encrypted ports ${[cfg.submission.starttls_port, cfg.submission.tls_port].filter(Boolean).join(", ") || "none"}`
       : "disabled"],
@@ -122,6 +124,12 @@ $("#test-form").addEventListener("submit", async (e) => {
 let connectInfo = null;
 async function getConnectInfo() { return (connectInfo ??= await api("/admin/api/connect-info")); }
 
+// "60/min" (explicit), "60/min (default)", or "unlimited", from a key's setting and the relay default.
+function describeLimit(value, dflt, unit) {
+  if (value === 0 || (value == null && dflt === 0)) return "unlimited";
+  return value != null ? `${value}/${unit}` : `${dflt}/${unit} (default)`;
+}
+
 function codeBox(text) {
   return `<div class="codebox"><pre>${esc(text)}</pre><button class="secondary small" data-copy="${esc(text)}">Copy</button></div>`;
 }
@@ -130,8 +138,9 @@ function renderConnect(info, key, secret) {
   const pw = secret || "<the key shown when this app was created>";
   const allowed = key.allowed_from?.length ? key.allowed_from : info.allowed_from;
   const fromList = allowed.join(", ");
-  const limits = [key.rate_per_minute && `${key.rate_per_minute} per minute`, key.rate_per_day && `${key.rate_per_day} per 24h`]
-    .filter(Boolean).join(", ") || "none";
+  const lim = info.limits;
+  const limits = `${describeLimit(key.rate_per_minute, lim.default_rate_per_minute, "minute")}, ${describeLimit(key.rate_per_day, lim.default_rate_per_day, "24h")}`
+    + (lim.global_rate_per_minute ? `; ${lim.global_rate_per_minute}/minute across all apps` : "");
   const smtp = info.smtp;
   let smtpHtml = `<p class="muted">SMTP submission is disabled (SUBMISSION_ENABLED=false).</p>`;
   if (smtp.enabled) {
@@ -198,10 +207,10 @@ $("#connect-close").addEventListener("click", () => $("#connect-dialog").close()
 
 // ---------------------------------------------------------------- keys
 async function loadKeys() {
-  const keys = await api("/admin/api/keys");
+  const [keys, info] = await Promise.all([api("/admin/api/keys"), getConnectInfo()]);
   window._keys = keys;
   $("#keys-body").innerHTML = keys.length ? keys.map((k) => {
-    const limits = [k.rate_per_minute && `${k.rate_per_minute}/min`, k.rate_per_day && `${k.rate_per_day}/day`].filter(Boolean).join(", ") || "—";
+    const limits = `${describeLimit(k.rate_per_minute, info.limits.default_rate_per_minute, "min")}, ${describeLimit(k.rate_per_day, info.limits.default_rate_per_day, "day")}`;
     const revoked = !!k.revoked_at;
     return `<tr class="${revoked ? "revoked" : ""}">
       <td><strong>${esc(k.name)}</strong><div class="muted">username: <code>${esc(k.username)}</code></div>${k.allow_plaintext_smtp ? `<div><span class="badge s-partial" title="This key may log in on the unencrypted SMTP port">unencrypted SMTP allowed</span></div>` : ""}${k.notes ? `<div class="muted">${esc(k.notes)}</div>` : ""}</td>
@@ -258,6 +267,10 @@ function openKeyDialog(key = null) {
   $("#key-dialog-title").textContent = key ? `Edit "${key.name}"` : "New API key";
   $("#k-name").value = key?.name ?? "";
   updateUsernamePreview();
+  getConnectInfo().then((i) => {
+    $("#k-rpm").placeholder = `default (${i.limits.default_rate_per_minute || "unlimited"})`;
+    $("#k-rpd").placeholder = `default (${i.limits.default_rate_per_day || "unlimited"})`;
+  }).catch(() => {});
   $("#k-rpm").value = key?.rate_per_minute ?? "";
   $("#k-rpd").value = key?.rate_per_day ?? "";
   $("#k-from").value = (key?.allowed_from ?? []).join(", ");
@@ -357,7 +370,7 @@ async function loadLogs() {
       <td>${esc(m.source || "")}</td>
       <td class="ellip">${esc(to.join(", "))}${bcc ? ` <span class="muted">+${bcc} bcc</span>` : ""}</td>
       <td class="ellip">${esc(m.subject)}${m.attachment_count ? ` <span class="muted">📎${m.attachment_count}</span>` : ""}</td>
-      <td>${badge(m.status)}</td><td>${m.attempts}</td>
+      <td style="white-space:nowrap">${badge(m.status)}${m.repeats ? ` <span class="muted" title="${(m.repeats + 1).toLocaleString()} identical rejections within a minute, folded into this one row">×${(m.repeats + 1).toLocaleString()}</span>` : ""}</td><td>${m.attempts}</td>
       <td class="ellip">${esc(m.error)}</td></tr>`;
   }).join("") : `<tr><td colspan="9" class="muted">No matching messages</td></tr>`;
   const end = Math.min(logOffset + PAGE, total);
@@ -387,7 +400,7 @@ async function openMessage(id) {
     ["Updated", fmtTime(m.updated_at)], ["Attempts", m.attempts],
     ["Next attempt", m.next_attempt_at ? fmtTime(m.next_attempt_at) : "—"],
     ["Size", `${m.size_bytes} bytes, ${m.attachment_count} attachment(s), ${m.has_html ? "HTML" : "text only"}`],
-    ["Message-ID", `<code>${esc(m.provider_id)}</code>`], ["Username", esc(m.username)], ["Via", esc(m.source)], ["Client IP", esc(m.client_ip)], ["Error", esc(m.error)],
+    ["Message-ID", `<code>${esc(m.provider_id)}</code>`], ["Username", esc(m.username)], ["Repeats", m.repeats ? `${m.repeats.toLocaleString()} identical rejections in the following minute were counted here instead of logged separately` : ""], ["Via", esc(m.source)], ["Client IP", esc(m.client_ip)], ["Error", esc(m.error)],
   ].filter(([, v]) => v !== "" && v !== "<code></code>");
   const events = m.events.map((ev) => `<tr><td style="white-space:nowrap">${fmtTime(ev.ts)}</td><td>${esc(ev.event)}</td><td>${esc(ev.detail)}</td></tr>`).join("");
   const body = m.payload

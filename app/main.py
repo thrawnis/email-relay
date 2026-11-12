@@ -270,6 +270,9 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
             "allowed_from": settings.mail_allowed_from,
             "max_recipients": settings.max_recipients,
             "max_attachment_bytes": settings.max_attachment_bytes,
+            "limits": {"default_rate_per_minute": settings.default_rate_per_minute,
+                       "default_rate_per_day": settings.default_rate_per_day,
+                       "global_rate_per_minute": settings.global_rate_per_minute},
         }
 
     @app.get("/admin/api/keys")
