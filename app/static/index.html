@@ -105,7 +105,8 @@
   <dialog id="key-dialog">
     <form id="key-form" method="dialog">
       <h2 id="key-dialog-title">New API key</h2>
-      <label>App name <input id="k-name" required maxlength="100"></label>
+      <label>App name <input id="k-name" required maxlength="100">
+        <small class="muted">SMTP username: <code id="k-username-preview">app</code> (lowercase, accents and spaces simplified)</small></label>
       <div class="grid2">
         <label>Max per minute <input id="k-rpm" type="number" min="1" placeholder="unlimited"></label>
         <label>Max per 24h <input id="k-rpd" type="number" min="1" placeholder="unlimited"></label>

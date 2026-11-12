@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import re
+import unicodedata
 import hmac
 import secrets
 import threading
@@ -14,6 +16,22 @@ def generate_key() -> tuple[str, str, str]:
     """Return (full_key, display_prefix, hash). Only the hash is stored."""
     full = KEY_PREFIX + secrets.token_urlsafe(32)
     return full, full[: len(KEY_PREFIX) + 6], hash_key(full)
+
+
+_SPECIAL = {"ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "đ": "d", "ð": "d", "þ": "th", "ł": "l", "ı": "i"}
+
+
+def slugify_username(name: str, max_len: int = 32) -> str:
+    """Lowercase ASCII username: accents folded, anything else collapsed to single hyphens.
+
+    "Café Ünïcode App!" -> "cafe-unicode-app"; empty/symbol-only input -> "app".
+    """
+    s = name.casefold()
+    s = "".join(_SPECIAL.get(ch, ch) for ch in s)
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^a-z0-9]+", "-", s.encode("ascii", "ignore").decode()).strip("-")
+    return s[:max_len].strip("-") or "app"
 
 
 def hash_key(full_key: str) -> str:

@@ -19,7 +19,7 @@ delivers it through the real backend with retry/backoff, and logs every attempt.
 
 - **Per-app API keys**: create, rename, edit and revoke them in the admin UI. A key is shown in full **once**, when it is created. Only its SHA-256 hash is stored.
 - **`POST /api/send`** accepts to/cc/bcc, subject, text and/or HTML, reply-to and base64 attachments.
-- **SMTP submission** for apps that only have "SMTP settings" (Gitea, Grafana, Vaultwarden, …): STARTTLS on 587 and/or implicit TLS on 465, with AUTH required. The username is the app name; the password is the app's key. The original MIME is forwarded unchanged (minus any `Bcc` header), and the same limits, sender rules and logging apply.
+- **SMTP submission** for apps that only have "SMTP settings" (Gitea, Grafana, Vaultwarden, …): STARTTLS on 587 and/or implicit TLS on 465, with AUTH required. The username is derived from the app name (see below); the password is the app's key. The original MIME is forwarded unchanged (minus any `Bcc` header), and the same limits, sender rules and logging apply.
 - **Connection details per app**: when a key is created, the dialog shows everything the app needs: SMTP host, ports, security, username and password, the HTTP endpoint, ready-to-paste curl and Python examples, and that app's limits. A **Connect** button on each key reopens this later, without the key. The relay's own upstream SMTP credentials are never shown.
 - **Persistent queue**: each request is saved to SQLite before the API returns `202`, and a background worker delivers it. Messages survive restarts, and anything that was in flight during a crash is re-queued.
 - **Retry with backoff** on transient failures: network errors, SMTP 4xx, auth problems. The default schedule is 30s, 2m, 10m, 30m, 1h, with up to 5 attempts. Permanent failures (SMTP 5xx) are not retried. An admin can re-queue a failed message.
@@ -254,9 +254,15 @@ Use the details from the key's **Connect** dialog. In the app's mail settings, e
 |---|---|
 | Host | `SUBMISSION_HOSTNAME` (e.g. `smtp.emailrelay.example.com`) |
 | Port / security | `587` + STARTTLS (preferred) or `465` + SSL/TLS |
-| Username | the app's name (informational) |
+| Username | the app's username, shown in its Connect dialog (informational) |
 | Password | the app's relay key (`erk_…`) |
 | From | `notify@example.com`, or another address the key is allowed to use |
+
+**Usernames** are generated from the app name: lowercase, accents folded to plain letters, and spaces or symbols
+collapsed to single hyphens, so they're safe in any app's SMTP settings. `Café Ünïcode App!` becomes `cafe-unicode-app`
+(`ß`→`ss`, `ø`→`o`, `ł`→`l`; a name with no Latin letters becomes `app`). Usernames are unique, with `-2`, `-3`… added when
+two names collapse to the same one, at most 32 characters, and they follow the app if you rename it. The relay doesn't check the
+username at login, because the key identifies the app, so a differently typed username never causes a failed login.
 
 How it behaves:
 - TLS is mandatory. AUTH isn't offered before STARTTLS, and MAIL is refused before AUTH.

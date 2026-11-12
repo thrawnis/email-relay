@@ -14,6 +14,8 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from .security import slugify_username
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_keys (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +93,24 @@ class Database:
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(messages)").fetchall()}
         if "source" not in cols:
             self._conn.execute("ALTER TABLE messages ADD COLUMN source TEXT")
+        key_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(api_keys)").fetchall()}
+        if "username" not in key_cols:
+            self._conn.execute("ALTER TABLE api_keys ADD COLUMN username TEXT")
+        for r in self._conn.execute("SELECT id, name FROM api_keys WHERE username IS NULL ORDER BY id").fetchall():
+            self._conn.execute("UPDATE api_keys SET username = ? WHERE id = ?",
+                               (self._unique_username(r["name"], r["id"]), r["id"]))
+        self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_api_keys_username ON api_keys(username)")
+
+    def _unique_username(self, name: str, exclude_id: int | None = None) -> str:
+        base = slugify_username(name)
+        taken = {r["username"] for r in self._conn.execute(
+            "SELECT username FROM api_keys WHERE username IS NOT NULL AND id IS NOT ?", (exclude_id,)).fetchall()}
+        candidate, n = base, 1
+        while candidate in taken:
+            n += 1
+            suffix = f"-{n}"
+            candidate = base[: 32 - len(suffix)].rstrip("-") + suffix
+        return candidate
 
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
@@ -124,10 +144,10 @@ class Database:
                    rate_per_day: int | None, allowed_from: list[str] | None, notes: str | None) -> dict:
         with self.tx() as c:
             cur = c.execute(
-                "INSERT INTO api_keys (name, key_prefix, key_hash, created_at, rate_per_minute, rate_per_day,"
-                " allowed_from, notes) VALUES (?,?,?,?,?,?,?,?)",
-                (name, key_prefix, key_hash, time.time(), rate_per_minute, rate_per_day,
-                 json.dumps(allowed_from) if allowed_from else None, notes),
+                "INSERT INTO api_keys (name, username, key_prefix, key_hash, created_at, rate_per_minute,"
+                " rate_per_day, allowed_from, notes) VALUES (?,?,?,?,?,?,?,?,?)",
+                (name, self._unique_username(name), key_prefix, key_hash, time.time(), rate_per_minute,
+                 rate_per_day, json.dumps(allowed_from) if allowed_from else None, notes),
             )
             return self.get_key(cur.lastrowid)
 
@@ -163,6 +183,9 @@ class Database:
                 v = json.dumps(v) if v else None
             sets.append(f"{k} = ?")
             params.append(v)
+        if "name" in fields:  # the derived username follows the name
+            sets.append("username = ?")
+            params.append(self._unique_username(fields["name"], key_id))
         if sets:
             with self.tx() as c:
                 c.execute(f"UPDATE api_keys SET {', '.join(sets)} WHERE id = ?", (*params, key_id))

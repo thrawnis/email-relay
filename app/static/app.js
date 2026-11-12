@@ -113,7 +113,7 @@ function renderConnect(info, key, secret) {
         <dt>Host</dt><dd><code>${esc(smtp.host)}</code></dd>
         <dt>Port / security</dt><dd>${ports.map(esc).join("<br>")}</dd>
         <dt>Authentication</dt><dd>Required — PLAIN or LOGIN</dd>
-        <dt>Username</dt><dd><code>${esc(key.name)}</code> <span class="muted">(informational; the password identifies the app)</span></dd>
+        <dt>Username</dt><dd><code>${esc(key.username)}</code> <span class="muted">(lowercase, plain characters; the password identifies the app)</span></dd>
         <dt>Password</dt><dd><code>${esc(pw)}</code></dd>
         <dt>From address</dt><dd>${esc(fromList)}</dd>
       </dl>${certNote}`;
@@ -166,7 +166,7 @@ async function loadKeys() {
     const limits = [k.rate_per_minute && `${k.rate_per_minute}/min`, k.rate_per_day && `${k.rate_per_day}/day`].filter(Boolean).join(", ") || "—";
     const revoked = !!k.revoked_at;
     return `<tr class="${revoked ? "revoked" : ""}">
-      <td><strong>${esc(k.name)}</strong>${k.notes ? `<div class="muted">${esc(k.notes)}</div>` : ""}</td>
+      <td><strong>${esc(k.name)}</strong><div class="muted">username: <code>${esc(k.username)}</code></div>${k.notes ? `<div class="muted">${esc(k.notes)}</div>` : ""}</td>
       <td><code>${esc(k.key_prefix)}…</code></td>
       <td>${esc(limits)}</td>
       <td>${esc(k.allowed_from.join(", ") || "default")}</td>
@@ -205,10 +205,23 @@ $("#keys-body").addEventListener("click", async (e) => {
   }
 });
 
+// Mirrors app/security.py:slugify_username (the server is the source of truth).
+function slugifyUsername(name) {
+  const special = { "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "đ": "d", "ð": "d", "þ": "th", "ł": "l", "ı": "i" };
+  const s = [...name.toLowerCase()].map((c) => special[c] ?? c).join("")
+    .normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32).replace(/-+$/g, "");
+  return s || "app";
+}
+function updateUsernamePreview() {
+  $("#k-username-preview").textContent = slugifyUsername($("#k-name").value);
+}
+$("#k-name").addEventListener("input", updateUsernamePreview);
+
 function openKeyDialog(key = null) {
   editingKeyId = key?.id ?? null;
   $("#key-dialog-title").textContent = key ? `Edit "${key.name}"` : "New API key";
   $("#k-name").value = key?.name ?? "";
+  updateUsernamePreview();
   $("#k-rpm").value = key?.rate_per_minute ?? "";
   $("#k-rpd").value = key?.rate_per_day ?? "";
   $("#k-from").value = (key?.allowed_from ?? []).join(", ");
