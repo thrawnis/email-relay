@@ -104,7 +104,13 @@ function renderConnect(info, key, secret) {
   const smtp = info.smtp;
   let smtpHtml = `<p class="muted">SMTP submission is disabled (SUBMISSION_ENABLED=false).</p>`;
   if (smtp.enabled) {
-    const ports = [smtp.starttls_port && `${smtp.starttls_port} — STARTTLS (recommended)`, smtp.tls_port && `${smtp.tls_port} — SSL/TLS (implicit)`].filter(Boolean);
+    const ports = [smtp.starttls_port && `${smtp.starttls_port} — STARTTLS (recommended)`, smtp.tls_port && `${smtp.tls_port} — SSL/TLS (implicit)`,
+      key.allow_plaintext_smtp && smtp.plain_port && `${smtp.plain_port} — NO encryption (allowed for this app)`].filter(Boolean);
+    const plainNote = key.allow_plaintext_smtp
+      ? (smtp.plain_port
+        ? `<div class="note">This app may connect <strong>without encryption</strong> on port ${smtp.plain_port} (security: <em>None</em>). Its key and its emails then cross the network in clear text. Prefer 587 or 465 if the app can use TLS.</div>`
+        : `<div class="note">Unencrypted SMTP is enabled for this key, but the relay's unencrypted port is disabled (SUBMISSION_PLAIN_PORT=0).</div>`)
+      : "";
     const cert = smtp.certificate || {};
     const certNote = cert.self_signed
       ? `<div class="note">The relay is using a <strong>self-signed certificate</strong> for SMTP. Configure TLS_CERT/TLS_KEY
@@ -117,7 +123,7 @@ function renderConnect(info, key, secret) {
         <dt>Username</dt><dd><code>${esc(key.username)}</code> <span class="muted">(lowercase, plain characters; the password identifies the app)</span></dd>
         <dt>Password</dt><dd><code>${esc(pw)}</code></dd>
         <dt>From address</dt><dd>${esc(fromList)}</dd>
-      </dl>${certNote}`;
+      </dl>${plainNote}${certNote}`;
   }
   const curl = `curl -X POST ${info.api.send_url} \\
   -H "Authorization: Bearer ${pw}" \\
@@ -167,7 +173,7 @@ async function loadKeys() {
     const limits = [k.rate_per_minute && `${k.rate_per_minute}/min`, k.rate_per_day && `${k.rate_per_day}/day`].filter(Boolean).join(", ") || "—";
     const revoked = !!k.revoked_at;
     return `<tr class="${revoked ? "revoked" : ""}">
-      <td><strong>${esc(k.name)}</strong><div class="muted">username: <code>${esc(k.username)}</code></div>${k.notes ? `<div class="muted">${esc(k.notes)}</div>` : ""}</td>
+      <td><strong>${esc(k.name)}</strong><div class="muted">username: <code>${esc(k.username)}</code></div>${k.allow_plaintext_smtp ? `<div><span class="badge s-partial" title="This key may log in on the unencrypted SMTP port">unencrypted SMTP allowed</span></div>` : ""}${k.notes ? `<div class="muted">${esc(k.notes)}</div>` : ""}</td>
       <td><code>${esc(k.key_prefix)}…</code></td>
       <td>${esc(limits)}</td>
       <td>${esc(k.allowed_from.join(", ") || "default")}</td>
@@ -227,6 +233,8 @@ function openKeyDialog(key = null) {
   $("#k-rpd").value = key?.rate_per_day ?? "";
   $("#k-from").value = (key?.allowed_from ?? []).join(", ");
   $("#k-notes").value = key?.notes ?? "";
+  $("#k-plain").checked = !!key?.allow_plaintext_smtp;
+  getConnectInfo().then((i) => { $("#k-plain-port").textContent = i.smtp.plain_port ?? "disabled"; }).catch(() => {});
   $("#key-error").textContent = "";
   $("#key-dialog").showModal();
 }
@@ -242,6 +250,7 @@ $("#key-form").addEventListener("submit", async (e) => {
     rate_per_day: num($("#k-rpd").value),
     allowed_from: $("#k-from").value.split(",").map((s) => s.trim()).filter(Boolean),
     notes: $("#k-notes").value.trim() || null,
+    allow_plaintext_smtp: $("#k-plain").checked,
   };
   try {
     if (editingKeyId) {

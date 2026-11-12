@@ -283,20 +283,26 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
         full, prefix, digest = generate_key()
         key = db.create_key(name=body.name.strip(), key_prefix=prefix, key_hash=digest,
                             rate_per_minute=body.rate_per_minute, rate_per_day=body.rate_per_day,
-                            allowed_from=body.allowed_from, notes=body.notes)
-        log.info("Created API key %s (%s)", key["id"], key["name"])
+                            allowed_from=body.allowed_from, notes=body.notes,
+                            allow_plaintext_smtp=body.allow_plaintext_smtp)
+        log.info("Created API key %s (%s)%s", key["id"], key["name"],
+                 " [unencrypted SMTP allowed]" if key["allow_plaintext_smtp"] else "")
         return {**key, "api_key": full}
 
     @app.patch("/admin/api/keys/{key_id}")
     async def update_key(key_id: int, body: KeyUpdate, request: Request):
         require_admin(request)
-        if not db.get_key(key_id):
+        existing = db.get_key(key_id)
+        if not existing:
             raise HTTPException(404, "Key not found")
         fields = body.model_dump(exclude_unset=True)
         if "name" in fields:
             if not fields["name"]:
                 raise HTTPException(422, "name cannot be empty")
             fields["name"] = fields["name"].strip()
+        if fields.get("allow_plaintext_smtp") is not None and fields["allow_plaintext_smtp"] != existing["allow_plaintext_smtp"]:
+            log.warning("API key %s (%s): unencrypted SMTP %s", key_id, existing["name"],
+                        "ENABLED" if fields["allow_plaintext_smtp"] else "disabled")
         return db.update_key(key_id, fields)
 
     @app.post("/admin/api/keys/{key_id}/revoke")

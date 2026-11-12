@@ -4,6 +4,8 @@
 # host's LAN interface. Everything is TLS:
 #   RELAY_HTTPS_PORT (8443) -> 8000  HTTPS: admin UI + API. NPM proxies to https://<this-host>:8443
 #   587 / 465                        SMTP submission (STARTTLS / implicit TLS), AUTH required
+#   2525 (SUBMISSION_PLAIN_PORT)     SMTP submission with NO encryption: only API keys that have
+#                                    "Allow unencrypted SMTP" enabled can log in on it (off by default)
 # Firewall these so only NPM (and cloudflared) reach 8443, and only the LAN reaches 587/465.
 services:
   email-relay:
@@ -14,6 +16,7 @@ services:
       - "${RELAY_HOST_BIND:-0.0.0.0}:${RELAY_HTTPS_PORT:-8443}:8000"
       - "${RELAY_HOST_BIND:-0.0.0.0}:${SUBMISSION_STARTTLS_PORT:-587}:${SUBMISSION_STARTTLS_PORT:-587}"
       - "${RELAY_HOST_BIND:-0.0.0.0}:${SUBMISSION_TLS_PORT:-465}:${SUBMISSION_TLS_PORT:-465}"
+      - "${RELAY_HOST_BIND:-0.0.0.0}:${SUBMISSION_PLAIN_PORT:-2525}:${SUBMISSION_PLAIN_PORT:-2525}"
     volumes:
       - ./data:/data
     restart: unless-stopped

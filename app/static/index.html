@@ -158,6 +158,9 @@
       </div>
       <label>Allowed "from" addresses <small class="muted">(comma separated; user@domain or *@domain; blank = relay default list)</small>
         <input id="k-from" placeholder="notify@example.com"></label>
+      <label class="check"><span><input id="k-plain" type="checkbox"> Allow unencrypted SMTP for this app</span>
+        <small class="muted">Off by default. Lets this app log in on the plain-text SMTP port (<span id="k-plain-port">2525</span>) for software that cannot use TLS.
+          Its key and its emails then cross the network <strong>unencrypted</strong>: use only on a trusted network.</small></label>
       <label>Notes <textarea id="k-notes" rows="2" maxlength="1000"></textarea></label>
       <p id="key-error" class="error"></p>
       <div class="row-end">

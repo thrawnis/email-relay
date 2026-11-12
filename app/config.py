@@ -78,6 +78,8 @@ class Settings:
     submission_bind: str = "0.0.0.0"
     submission_starttls_port: int = 587  # 0 = disabled
     submission_tls_port: int = 465       # 0 = disabled
+    # UNENCRYPTED listener, for apps that cannot do TLS. Only keys with "allow unencrypted SMTP" can log in on it.
+    submission_plain_port: int = 2525    # 0 = disabled
 
     # Problems found while reading the environment (e.g. an attempt to turn HTTPS off)
     config_errors: list[str] = field(default_factory=list)
@@ -126,6 +128,7 @@ class Settings:
             submission_bind=_env("SUBMISSION_BIND_ADDRESS", "0.0.0.0"),
             submission_starttls_port=_int("SUBMISSION_STARTTLS_PORT", 587),
             submission_tls_port=_int("SUBMISSION_TLS_PORT", 465),
+            submission_plain_port=_int("SUBMISSION_PLAIN_PORT", 2525),
         )
 
     def validate(self) -> list[str]:
@@ -151,8 +154,11 @@ class Settings:
         for f in (self.tls_cert, self.tls_key):
             if f and not os.path.isfile(f):
                 problems.append(f"{f} does not exist")
-        if self.submission_enabled and not (self.submission_starttls_port or self.submission_tls_port):
-            problems.append("SUBMISSION_ENABLED=true but both submission ports are 0")
+        ports = [p for p in (self.submission_starttls_port, self.submission_tls_port, self.submission_plain_port) if p]
+        if self.submission_enabled and not ports:
+            problems.append("SUBMISSION_ENABLED=true but all submission ports are 0")
+        if len(ports) != len(set(ports)):
+            problems.append("SUBMISSION_STARTTLS_PORT, SUBMISSION_TLS_PORT and SUBMISSION_PLAIN_PORT must differ")
         if self.smtp_security not in ("starttls", "ssl", "none"):
             problems.append("SMTP_SECURITY must be starttls, ssl or none")
         return problems

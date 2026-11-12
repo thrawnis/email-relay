@@ -16,6 +16,7 @@ import hashlib
 import logging
 import os
 import ssl
+import warnings
 import threading
 from email import policy
 from email.parser import BytesParser
@@ -38,8 +39,10 @@ def _addresses(msg, header: str) -> list[str]:
 
 
 class SubmissionHandler:
-    def __init__(self, relay: Relay):
+    def __init__(self, relay: Relay, plain: bool = False):
         self.relay = relay
+        self.plain = plain  # True on the unencrypted listener
+        self.source = "smtp-plain" if plain else "smtp"
 
     @staticmethod
     def _peer(session) -> str | None:
@@ -56,9 +59,20 @@ class SubmissionHandler:
             if getattr(session, "relay_last_failed", None) != fingerprint:
                 session.relay_last_failed = fingerprint
                 # Logged as a rejected attempt carrying the username that was typed.
-                self.relay.reject(f"SMTP login failed: {err}", status_code=401, source="smtp", key=key,
+                self.relay.reject(f"SMTP login failed: {err}", status_code=401, source=self.source, key=key,
                                   client_ip=self._peer(session), username=username)
                 log.warning("SMTP AUTH failed from %s user=%r: %s", self._peer(session), username, err)
+            return AuthResult(success=False, handled=False)
+        if self.plain and not key["allow_plaintext_smtp"]:
+            # Valid key, but it hasn't been allowed to authenticate without encryption.
+            err = "this API key is not allowed to connect without encryption (use port 587/465, or enable unencrypted SMTP for the key)"
+            fingerprint = (username, hashlib.sha256(auth_data.password).hexdigest())
+            if getattr(session, "relay_last_failed", None) != fingerprint:
+                session.relay_last_failed = fingerprint
+                self.relay.reject(f"SMTP login refused: {err}", status_code=403, source=self.source, key=key,
+                                  client_ip=self._peer(session), username=username)
+                log.warning("Unencrypted SMTP login refused from %s user=%r: key '%s' is not allowed plaintext",
+                            self._peer(session), username, key["name"])
             return AuthResult(success=False, handled=False)
         session.relay_username = username  # remembered for every message sent on this connection
         return AuthResult(success=True, auth_data=key)
@@ -88,7 +102,7 @@ class SubmissionHandler:
         payload = {"raw": base64.b64encode(raw).decode(), "envelope_to": rcpts, "subject": subject,
                    **recipients}
         adm = self.relay.admit(
-            key=key, source="smtp", from_addr=from_addr, recipients=recipients, subject=subject,
+            key=key, source=self.source, from_addr=from_addr, recipients=recipients, subject=subject,
             payload=payload,
             has_html=any(p.get_content_type() == "text/html" for p in msg.walk()),
             attachment_count=sum(1 for p in msg.walk() if p.get_content_disposition() == "attachment"),
@@ -169,6 +183,18 @@ class SubmissionServer:
             c.start()
             self.controllers.append(c)
             log.info("SMTP submission (implicit TLS) listening on %s:%d", s.submission_bind, s.submission_tls_port)
+        if s.submission_plain_port:
+            plain = SubmissionHandler(self.relay, plain=True)
+            with warnings.catch_warnings():  # aiosmtpd warns about AUTH without TLS: intentional, per-key opt-in
+                warnings.simplefilter("ignore", UserWarning)
+                c = Controller(port=s.submission_plain_port, handler=plain, hostname=s.submission_bind,
+                               server_hostname=s.submission_hostname, ident="email-relay",
+                               authenticator=plain.authenticate, auth_required=True, auth_require_tls=False,
+                               data_size_limit=common["data_size_limit"])
+                c.start()
+            self.controllers.append(c)
+            log.warning("UNENCRYPTED SMTP submission listening on %s:%d (only keys with unencrypted SMTP enabled can log in)",
+                        s.submission_bind, s.submission_plain_port)
         threading.Thread(target=self._watch_cert, name="cert-watch", daemon=True).start()
 
     def stop(self) -> None:
@@ -183,7 +209,8 @@ class SubmissionServer:
     def status(self) -> dict:
         s = self.settings
         out = {"enabled": s.submission_enabled, "starttls_port": s.submission_starttls_port or None,
-               "tls_port": s.submission_tls_port or None, "running": bool(self.controllers)}
+               "tls_port": s.submission_tls_port or None, "plain_port": s.submission_plain_port or None,
+               "running": bool(self.controllers)}
         if self.cert_path:
             out["certificate"] = {"path": self.cert_path, **describe_cert(self.cert_path)}
         return out

@@ -47,6 +47,7 @@ tr.revoked td { opacity: .55; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; } dt { color: var(--muted); } dd { margin: 0; word-break: break-all; }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; }
 .s-sent { color: var(--ok); } .s-failed, .s-rejected { color: var(--bad); } .s-queued, .s-sending, .s-retrying, .s-partial { color: var(--warn); }
+label.check { flex-direction: column; gap: 2px; } label.check input { width: auto; }
 .banner { background: var(--warn); color: #fff; padding: 8px 20px; font-weight: 600; }
 .ellip { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
@@ -63,7 +64,8 @@ pre { background: var(--bg); padding: 10px; border-radius: 6px; white-space: pre
 .connect .codebox button { position: absolute; top: 6px; right: 6px; }
 .note { background: var(--bg); border-left: 3px solid var(--warn); padding: 8px 12px; border-radius: 4px; margin: 8px 0; }
 
-@media (prefers-color-scheme: dark) { .banner { color: #000; } }
+@media (prefers-color-scheme: dark) { label.check { flex-direction: column; gap: 2px; } label.check input { width: auto; }
+.banner { color: #000; } }
 /* charts */
 .filters-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 8px; }
 .filters-row .inline-label { flex-direction: row; align-items: center; margin: 0; }

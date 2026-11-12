@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     rate_per_minute  INTEGER,
     rate_per_day     INTEGER,
     allowed_from     TEXT,              -- JSON list of addresses / *@domain patterns, NULL = global list
-    notes            TEXT
+    notes            TEXT,
+    allow_plaintext_smtp  INTEGER NOT NULL DEFAULT 0   -- may log in on the unencrypted SMTP port
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -97,6 +98,8 @@ class Database:
         if "username" not in cols:
             self._conn.execute("ALTER TABLE messages ADD COLUMN username TEXT")
         key_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(api_keys)").fetchall()}
+        if "allow_plaintext_smtp" not in key_cols:
+            self._conn.execute("ALTER TABLE api_keys ADD COLUMN allow_plaintext_smtp INTEGER NOT NULL DEFAULT 0")
         if "username" not in key_cols:
             self._conn.execute("ALTER TABLE api_keys ADD COLUMN username TEXT")
         for r in self._conn.execute("SELECT id, name FROM api_keys WHERE username IS NULL ORDER BY id").fetchall():
@@ -144,13 +147,14 @@ class Database:
 
     # ------------------------------------------------------------------ keys
     def create_key(self, *, name: str, key_prefix: str, key_hash: str, rate_per_minute: int | None,
-                   rate_per_day: int | None, allowed_from: list[str] | None, notes: str | None) -> dict:
+                   rate_per_day: int | None, allowed_from: list[str] | None, notes: str | None,
+                   allow_plaintext_smtp: bool = False) -> dict:
         with self.tx() as c:
             cur = c.execute(
                 "INSERT INTO api_keys (name, username, key_prefix, key_hash, created_at, rate_per_minute,"
-                " rate_per_day, allowed_from, notes) VALUES (?,?,?,?,?,?,?,?,?)",
+                " rate_per_day, allowed_from, notes, allow_plaintext_smtp) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (name, self._unique_username(name), key_prefix, key_hash, time.time(), rate_per_minute,
-                 rate_per_day, json.dumps(allowed_from) if allowed_from else None, notes),
+                 rate_per_day, json.dumps(allowed_from) if allowed_from else None, notes, int(allow_plaintext_smtp)),
             )
             return self.get_key(cur.lastrowid)
 
@@ -177,13 +181,15 @@ class Database:
         return [_decode_key(r) for r in rows]
 
     def update_key(self, key_id: int, fields: dict) -> dict | None:
-        allowed = {"name", "rate_per_minute", "rate_per_day", "allowed_from", "notes"}
+        allowed = {"name", "rate_per_minute", "rate_per_day", "allowed_from", "notes", "allow_plaintext_smtp"}
         sets, params = [], []
         for k, v in fields.items():
             if k not in allowed:
                 continue
             if k == "allowed_from":
                 v = json.dumps(v) if v else None
+            if k == "allow_plaintext_smtp":
+                v = int(bool(v))
             sets.append(f"{k} = ?")
             params.append(v)
         if "name" in fields:  # the derived username follows the name
@@ -395,5 +401,6 @@ def _decode_key(row: dict | None) -> dict | None:
     if row is None:
         return None
     row["allowed_from"] = json.loads(row["allowed_from"]) if row.get("allowed_from") else []
+    row["allow_plaintext_smtp"] = bool(row.get("allow_plaintext_smtp"))
     row.pop("key_hash", None)
     return row

@@ -25,7 +25,8 @@ def smtp_env(tmp_path):
                         mail_from="notify@example.com", mail_allowed_from=["notify@example.com"],
                         mail_backend="console", retry_schedule=[0], public_hostname="localhost",
                         submission_enabled=True, submission_bind="127.0.0.1",
-                        submission_starttls_port=free_port(), submission_tls_port=free_port())
+                        submission_starttls_port=free_port(), submission_tls_port=free_port(),
+                        submission_plain_port=free_port())
     backend = FakeBackend()
     app = create_app(settings, backend)
     with TestClient(app, base_url="https://testserver") as client:
@@ -207,3 +208,66 @@ def test_api_attempts_carry_the_key_username(smtp_env):
     assert by_app == {"gitea": "gitea", "(unauthenticated)": None}
     detail = client.get(f"/admin/api/messages/{_log(client, q='gitea')[0]['id']}").json()
     assert detail["username"] == "gitea"
+
+
+def _smtp_plain(settings):
+    return smtplib.SMTP("localhost", settings.submission_plain_port, timeout=5)
+
+
+def test_plain_port_refuses_keys_that_are_not_allowed(smtp_env):
+    client, backend, app, settings, key = smtp_env
+    with _smtp_plain(settings) as s:
+        s.ehlo()
+        assert "starttls" not in s.esmtp_features  # no encryption offered at all
+        with pytest.raises(smtplib.SMTPAuthenticationError) as e:
+            s.login("gitea", key)  # valid key, but unencrypted SMTP is off for it (the default)
+        assert e.value.smtp_code == 535
+    rows = _log(client, status="rejected")
+    assert len(rows) == 1 and rows[0]["source"] == "smtp-plain" and rows[0]["username"] == "gitea"
+    assert rows[0]["app_name"] == "gitea" and "not allowed to connect without encryption" in rows[0]["error"]
+    assert not backend.sent
+
+
+def test_key_setting_defaults_to_false_and_enables_plain_login(smtp_env):
+    client, backend, app, settings, key = smtp_env
+    k = client.get("/admin/api/keys").json()[0]
+    assert k["allow_plaintext_smtp"] is False
+    r = client.patch(f"/admin/api/keys/{k['id']}", json={"allow_plaintext_smtp": True}).json()
+    assert r["allow_plaintext_smtp"] is True
+
+    with _smtp_plain(settings) as s:
+        s.login("Gitea", key)
+        s.send_message(make_msg())
+    wait_until(lambda: backend.sent)
+    m = _log(client, status="queued,sent")[0]
+    assert m["source"] == "smtp-plain" and m["username"] == "Gitea" and m["app_name"] == "gitea"
+
+    # a wrong key is still refused on the plain port
+    with _smtp_plain(settings) as s:
+        with pytest.raises(smtplib.SMTPAuthenticationError):
+            s.login("gitea", "erk_wrong")
+
+    # turning it off again takes effect immediately; the encrypted ports keep working either way
+    client.patch(f"/admin/api/keys/{k['id']}", json={"allow_plaintext_smtp": False})
+    with _smtp_plain(settings) as s:
+        with pytest.raises(smtplib.SMTPAuthenticationError):
+            s.login("gitea", key)
+    with smtplib.SMTP_SSL("localhost", settings.submission_tls_port, timeout=5, context=tls_ctx(settings)) as s:
+        s.login("gitea", key)
+
+
+def test_renaming_a_key_does_not_change_the_plaintext_setting(smtp_env):
+    client, _, _, _, _ = smtp_env
+    k = client.post("/admin/api/keys", json={"name": "legacy", "allow_plaintext_smtp": True}).json()
+    assert k["allow_plaintext_smtp"] is True
+    r = client.patch(f"/admin/api/keys/{k['id']}", json={"name": "legacy 2"}).json()
+    assert r["allow_plaintext_smtp"] is True
+
+
+def test_connect_info_and_port_validation(smtp_env, tmp_path):
+    client, _, _, settings, _ = smtp_env
+    assert client.get("/admin/api/connect-info").json()["smtp"]["plain_port"] == settings.submission_plain_port
+    with pytest.raises(RuntimeError, match="must differ"):
+        create_app(Settings(admin_password="p", secret_key="x" * 40, mail_from="a@b.com", mail_backend="console",
+                            db_path=str(tmp_path / "d.db"), submission_starttls_port=2525, submission_plain_port=2525),
+                   FakeBackend())

@@ -97,6 +97,8 @@ class KeyCreate(BaseModel):
     rate_per_day: int | None = Field(default=None, ge=1)
     allowed_from: list[str] = []
     notes: str | None = Field(default=None, max_length=1000)
+    # Lets this key log in on the UNENCRYPTED SMTP port (its key and mail then cross the network in clear text)
+    allow_plaintext_smtp: bool = False
 
     @field_validator("allowed_from")
     @classmethod

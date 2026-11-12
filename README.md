@@ -265,8 +265,21 @@ collapsed to single hyphens, so they're safe in any app's SMTP settings. `Café 
 two names collapse to the same one, at most 32 characters, and they follow the app if you rename it. The relay doesn't check the
 username at login, because the key identifies the app, so a differently typed username never causes a failed login.
 
+### Apps that cannot use TLS (per-key opt-in)
+
+Some old software can't do STARTTLS or SSL. For those, the relay has an **unencrypted** SMTP port, `SUBMISSION_PLAIN_PORT`
+(default **2525**, not 25), with these rules:
+
+- It is **off for every key by default**. A key can only log in there if you tick **Allow unencrypted SMTP for this app** in
+  its create/edit dialog. Any other key, valid or not, is refused and the attempt is logged (Via = `smtp-plain`).
+- The key and the emails then cross your network in **clear text**. Use it only on a trusted segment, and give each such
+  app its own key with a tight "allowed from" list and rate limit, so that a sniffed key can do little harm.
+- The Connect dialog for such a key lists port 2525 with security *None*, next to the encrypted options.
+- The HTTP API and the admin UI are unaffected: they remain HTTPS only.
+- To remove the port entirely, set `SUBMISSION_PLAIN_PORT=0` and delete its line from `docker-compose.yml`.
+
 How it behaves:
-- TLS is mandatory. AUTH isn't offered before STARTTLS, and MAIL is refused before AUTH.
+- TLS is mandatory on ports 587 and 465. AUTH isn't offered before STARTTLS, and MAIL is refused before AUTH.
 - A message is accepted with `250 … queued as <id>` and then delivered through the same queue as the API.
 - If the `From` header isn't allowed, the server replies `553`. If the app is over its rate limit, it replies `451`, a temporary error, so the app retries later.
 - Every attempt, including failed logins, is logged with **Via = smtp**.
