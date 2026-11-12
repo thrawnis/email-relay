@@ -24,6 +24,7 @@
         <button data-tab="overview" class="tab active">Overview</button>
         <button data-tab="keys" class="tab">API keys</button>
         <button data-tab="logs" class="tab">Send log</button>
+        <button data-tab="config" class="tab">Configuration</button>
       </nav>
       <button id="logout" class="secondary">Sign out</button>
     </header>
@@ -31,23 +32,22 @@
     <main>
       <!-- Overview -->
       <section id="tab-overview" class="tab-panel">
+        <div class="card">
+          <div class="row-between">
+            <h2>Recently sent <span class="muted small">last 24 hours</span></h2>
+            <a href="#" id="recent-more" class="more-link" data-goto="logs">View all in the Send log →</a>
+          </div>
+          <table class="logs">
+            <thead><tr><th>Time</th><th>App</th><th>To</th><th>Subject</th><th>Status</th></tr></thead>
+            <tbody id="recent-body"></tbody>
+          </table>
+        </div>
+
         <div id="stats" class="stats"></div>
-        <div class="grid2">
-          <div class="card">
-            <h2>Last 24h by app</h2>
-            <table><thead><tr><th>App</th><th>Sent</th><th>Failed/rejected</th><th>Total</th></tr></thead>
-              <tbody id="per-app"></tbody></table>
-          </div>
-          <div class="card">
-            <h2>Configuration</h2>
-            <dl id="config"></dl>
-            <h3>Send a test email</h3>
-            <form id="test-form" class="inline">
-              <input type="email" id="test-to" placeholder="you@example.com" required>
-              <button type="submit">Send test</button>
-            </form>
-            <p id="test-result" class="muted"></p>
-          </div>
+        <div class="card">
+          <h2>Last 24h by app</h2>
+          <table><thead><tr><th>App</th><th>Sent</th><th>Failed/rejected</th><th>Total</th></tr></thead>
+            <tbody id="per-app"></tbody></table>
         </div>
 
         <!-- Usage charts -->
@@ -111,21 +111,45 @@
         </div>
       </section>
 
+      <!-- Configuration -->
+      <section id="tab-config" class="tab-panel hidden">
+        <div class="card">
+          <h2>Configuration</h2>
+          <p class="muted small">Read-only. Change these in the server's <code>.env</code> file and run <code>./rebuild.sh</code>.</p>
+          <dl id="config"></dl>
+        </div>
+        <div class="card">
+          <h2>Send a test email</h2>
+          <form id="test-form" class="inline">
+            <input type="email" id="test-to" placeholder="you@example.com" required>
+            <button type="submit">Send test</button>
+          </form>
+          <p id="test-result" class="muted"></p>
+        </div>
+      </section>
+
       <!-- Logs -->
       <section id="tab-logs" class="tab-panel hidden">
         <div class="card">
           <form id="log-filters" class="filters">
             <input type="search" id="f-q" placeholder="Search subject, recipient, username, error, id…">
-            <select id="f-app"><option value="">All apps</option></select>
+            <select id="f-key" aria-label="API key"><option value="">All API keys</option></select>
             <select id="f-status">
               <option value="">Any status</option>
               <option value="sent">sent</option>
+              <option value="sent,partial">sent (including partial)</option>
               <option value="partial">partial (some recipients refused)</option>
               <option value="queued,sending,retrying">pending</option>
               <option value="retrying">retrying</option>
               <option value="failed">failed</option>
               <option value="rejected">rejected</option>
               <option value="failed,rejected,partial">all problems</option>
+            </select>
+            <select id="f-range" aria-label="Time range">
+              <option value="">Any time</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
             </select>
             <label>From <input type="date" id="f-since"></label>
             <label>To <input type="date" id="f-until"></label>

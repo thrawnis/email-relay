@@ -103,3 +103,5 @@ details.card summary { cursor: pointer; font-weight: 600; }
 
 .section-title { font-size: 16px; margin: 24px 0 8px; }
 #charts-section { margin-top: 8px; }
+
+.more-link { font-size: 13px; white-space: nowrap; color: var(--accent); text-decoration: none; } .more-link:hover { text-decoration: underline; }

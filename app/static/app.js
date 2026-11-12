@@ -44,13 +44,14 @@ $("#logout").addEventListener("click", async () => { await api("/admin/api/logou
 function switchTab(name) {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("hidden", p.id !== `tab-${name}`));
-  ({ overview: loadOverview, keys: loadKeys, logs: loadLogs })[name]();
+  ({ overview: loadOverview, keys: loadKeys, logs: loadLogs, config: loadConfig })[name]();
 }
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
 // ---------------------------------------------------------------- overview
 async function loadOverview() {
   if (typeof window.loadCharts === "function") window.loadCharts(); // usage charts at the bottom of this page
+  loadRecent();
   const [stats, cfg] = await Promise.all([api("/admin/api/stats"), api("/admin/api/config")]);
   $("#test-banner").classList.toggle("hidden", cfg.mail_backend !== "console");
   const d = stats.by_status["24h"] || {}, w = stats.by_status["7d"] || {};
@@ -63,13 +64,44 @@ async function loadOverview() {
   $("#per-app").innerHTML = stats.per_app_24h.length
     ? stats.per_app_24h.map((r) => `<tr><td>${esc(r.app_name)}</td><td>${r.sent}</td><td>${r.failed}</td><td>${r.total}</td></tr>`).join("")
     : `<tr><td colspan="4" class="muted">No messages in the last 24h</td></tr>`;
+}
+
+// The last few emails that went out in the past 24 hours, newest first.
+async function loadRecent() {
+  const since = Date.now() / 1000 - 86400;
+  const { items, total } = await api(`/admin/api/messages?status=sent,partial&since=${since}&limit=6`);
+  $("#recent-body").innerHTML = items.length ? items.map((m) => {
+    const to = [...(m.recipients.to || []), ...(m.recipients.cc || [])];
+    return `<tr class="clickable" data-id="${esc(m.id)}">
+      <td style="white-space:nowrap">${fmtTime(m.created_at)}</td><td>${esc(m.app_name)}</td>
+      <td class="ellip">${esc(to.join(", "))}</td><td class="ellip">${esc(m.subject)}</td><td>${badge(m.status)}</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="muted">No emails were sent in the last 24 hours.</td></tr>`;
+  $("#recent-more").textContent = total > items.length ? `View all ${total.toLocaleString()} in the Send log →` : "Open the Send log →";
+}
+$("#recent-body").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-id]");
+  if (tr) openMessage(tr.dataset.id);
+});
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-goto]");
+  if (!a) return;
+  e.preventDefault();
+  // the Overview's "View all" link opens the log with the same filter the list above uses
+  if (a.id === "recent-more") showLog({ status: "sent,partial", range: "24h" });
+  else switchTab(a.dataset.goto);
+});
+
+async function loadConfig() {
+  const cfg = await api("/admin/api/config");
   const rows = [
     ["Backend", cfg.backend], ["Default from", cfg.mail_from_name ? `${cfg.mail_from_name} <${cfg.mail_from}>` : cfg.mail_from],
     ["Allowed from", cfg.mail_allowed_from.join(", ")], ["Max attempts", cfg.max_attempts],
     ["Retry delays (s)", cfg.retry_schedule_seconds.join(", ")], ["Max recipients", cfg.max_recipients],
     ["SMTP submission", cfg.submission.enabled
-      ? `${cfg.submission.running ? "running" : "NOT running"} — ports ${[cfg.submission.starttls_port, cfg.submission.tls_port].filter(Boolean).join(", ")}`
+      ? `${cfg.submission.running ? "running" : "NOT running"} — encrypted ports ${[cfg.submission.starttls_port, cfg.submission.tls_port].filter(Boolean).join(", ") || "none"}`
       : "disabled"],
+    ["Unencrypted SMTP port", cfg.submission.enabled && cfg.submission.plain_port
+      ? `${cfg.submission.plain_port} (only for keys with "Allow unencrypted SMTP")` : "disabled"],
     ["Submission cert", !cfg.submission.certificate ? "—" : cfg.submission.certificate.error
       ? cfg.submission.certificate.error
       : `${cfg.submission.certificate.self_signed ? "SELF-SIGNED" : cfg.submission.certificate.issuer}; ${(cfg.submission.certificate.names || []).join(", ")}; expires ${new Date(cfg.submission.certificate.not_after * 1000).toLocaleDateString()}`],
@@ -82,8 +114,7 @@ $("#test-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
     const r = await api("/admin/api/test-send", { method: "POST", body: { to: $("#test-to").value } });
-    $("#test-result").innerHTML = `Queued as <code>${esc(r.id)}</code> — check the Send log for the result.`;
-    setTimeout(loadOverview, 2000);
+    $("#test-result").innerHTML = `Queued as <code>${esc(r.id)}</code>. It will appear under "Recently sent" on the Overview once delivered; failures show in the Send log.`;
   } catch (err) { $("#test-result").textContent = err.message; }
 });
 
@@ -200,9 +231,7 @@ $("#keys-body").addEventListener("click", async (e) => {
     $("#connect-dialog").showModal();
   }
   if (t.dataset.logs) {
-    const k = window._keys.find((k) => k.id == t.dataset.logs);
-    resetFilters(); switchTab("logs");
-    await loadAppOptions(); $("#f-app").value = k.name; logOffset = 0; loadLogs();
+    showLog({ keyId: t.dataset.logs });  // filter the Send log to exactly this key
   }
   if (t.dataset.revoke) {
     const k = window._keys.find((k) => k.id == t.dataset.revoke);
@@ -280,11 +309,24 @@ $("#secret-close").addEventListener("click", () => {
 $("#secret-dialog").addEventListener("cancel", (e) => e.preventDefault()); // force explicit acknowledgement
 
 // ---------------------------------------------------------------- logs
-async function loadAppOptions() {
-  const { apps } = await api("/admin/api/stats");
-  const cur = $("#f-app").value;
-  $("#f-app").innerHTML = `<option value="">All apps</option>` + apps.map((a) => `<option>${esc(a)}</option>`).join("");
-  $("#f-app").value = cur;
+// Filter options are keyed by the API key's id, so renamed keys and keys with no log entries yet still filter correctly.
+async function loadKeyOptions() {
+  const keys = await api("/admin/api/keys");
+  const cur = $("#f-key").value;
+  $("#f-key").innerHTML = `<option value="">All API keys</option>`
+    + keys.map((k) => `<option value="${k.id}">${esc(k.name)}${k.revoked_at ? " (revoked)" : ""}</option>`).join("")
+    + `<option value="none">No key (unknown key, admin tests)</option>`;
+  $("#f-key").value = cur;
+}
+
+// Open the Send log with a preset filter (always starts from a clean filter set).
+async function showLog({ keyId = "", status = "", range = "" } = {}) {
+  resetFilters();
+  await loadKeyOptions();
+  $("#f-key").value = String(keyId);
+  $("#f-status").value = status;
+  $("#f-range").value = range;
+  switchTab("logs");
 }
 
 function dateToEpoch(v, endOfDay) {
@@ -295,13 +337,14 @@ function dateToEpoch(v, endOfDay) {
 }
 
 async function loadLogs() {
-  if ($("#f-app").options.length <= 1) await loadAppOptions();
+  await loadKeyOptions();
   const p = new URLSearchParams({ limit: PAGE, offset: logOffset });
   const add = (k, v) => v !== null && v !== "" && p.set(k, v);
   add("q", $("#f-q").value.trim());
-  add("app", $("#f-app").value);
+  add("key_id", $("#f-key").value);
   add("status", $("#f-status").value);
-  add("since", dateToEpoch($("#f-since").value, false));
+  const rangeDays = { "24h": 1, "7d": 7, "30d": 30 }[$("#f-range").value];
+  add("since", rangeDays ? Date.now() / 1000 - rangeDays * 86400 : dateToEpoch($("#f-since").value, false));
   add("until", dateToEpoch($("#f-until").value, true));
   const { items, total } = await api(`/admin/api/messages?${p}`);
   $("#logs-body").innerHTML = items.length ? items.map((m) => {

@@ -319,7 +319,7 @@ class Database:
         return self.query("SELECT ts, event, detail FROM message_events WHERE message_id = ? ORDER BY id",
                           (message_id,))
 
-    def search_messages(self, *, q: str | None = None, key_id: int | None = None, app: str | None = None,
+    def search_messages(self, *, q: str | None = None, key_id: int | str | None = None, app: str | None = None,
                         status: str | None = None, since: float | None = None, until: float | None = None,
                         limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         where, params = [], []
@@ -328,7 +328,9 @@ class Database:
             where.append("(LOWER(subject) LIKE ? OR recipients_search LIKE ? OR LOWER(error) LIKE ?"
                          " OR id = ? OR LOWER(from_addr) LIKE ? OR LOWER(username) LIKE ?)")
             params += [like, like, like, q.strip(), like, like]
-        if key_id is not None:
+        if key_id == "none":  # attempts not tied to any key: unknown keys, admin test sends
+            where.append("key_id IS NULL")
+        elif key_id is not None:
             where.append("key_id = ?")
             params.append(key_id)
         if app:

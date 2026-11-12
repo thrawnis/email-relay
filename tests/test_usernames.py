@@ -94,3 +94,30 @@ def test_assets_are_versioned_and_revalidated(client):
     r = client.get(f"/static/app.js?v={versions[0]}")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
     assert "etag" in r.headers
+
+
+def test_log_filter_by_key_id(client):
+    a = client.post("/admin/api/keys", json={"name": "alpha"}).json()
+    b = client.post("/admin/api/keys", json={"name": "beta"}).json()
+    quiet = client.post("/admin/api/keys", json={"name": "quiet"}).json()  # never sent anything
+    db = client.app.state.db
+    for key, n in ((a, 3), (b, 2)):
+        for _ in range(n):
+            db.insert_message(key_id=key["id"], app_name=key["name"], from_addr="n@example.com",
+                              recipients={"to": ["x@example.com"]}, subject="s", status="sent")
+    db.insert_message(key_id=None, app_name="(unauthenticated)", from_addr=None, recipients={}, subject=None,
+                      status="rejected", error="bad key")
+
+    def get(**q):
+        from urllib.parse import urlencode
+        return client.get("/admin/api/messages?" + urlencode(q)).json()
+
+    assert get(key_id=a["id"])["total"] == 3 and {m["app_name"] for m in get(key_id=a["id"])["items"]} == {"alpha"}
+    assert get(key_id=b["id"])["total"] == 2
+    assert get(key_id=quiet["id"])["total"] == 0          # a key with no entries shows nothing, not everything
+    assert get(key_id="none")["total"] == 1               # unknown-key attempts
+    assert get(key_id="")["total"] == 6                   # no filter
+    # renaming a key must not detach its history from the filter
+    client.patch(f"/admin/api/keys/{a['id']}", json={"name": "alpha renamed"})
+    assert get(key_id=a["id"])["total"] == 3
+    assert client.get("/admin/api/messages?key_id=abc").status_code == 422

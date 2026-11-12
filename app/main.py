@@ -314,11 +314,17 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
         return db.revoke_key(key_id)
 
     @app.get("/admin/api/messages")
-    async def list_messages(request: Request, q: str | None = None, key_id: int | None = None,
+    async def list_messages(request: Request, q: str | None = None, key_id: str | None = None,
                             app: str | None = None, status: str | None = None, since: float | None = None,
                             until: float | None = None, limit: int = 50, offset: int = 0):
         require_admin(request)
-        rows, total = db.search_messages(q=q, key_id=key_id, app=app, status=status, since=since, until=until,
+        if key_id not in (None, "", "none"):
+            try:
+                key_id = int(key_id)
+            except ValueError:
+                raise HTTPException(422, "key_id must be a number or 'none'")
+        rows, total = db.search_messages(q=q or None, key_id=key_id or None, app=app or None, status=status or None,
+                                         since=since, until=until,
                                          limit=max(1, min(limit, 500)), offset=max(0, offset))
         return {"items": rows, "total": total}
 
