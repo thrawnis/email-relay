@@ -45,20 +45,22 @@ class Relay:
     # ------------------------------------------------------------- logging
     def reject(self, error: str, *, status_code: int, source: str, key: dict | None = None,
                app_name: str | None = None, from_addr: str | None = None, recipients: dict | None = None,
-               subject: str | None = None, client_ip: str | None = None, retry_after: int | None = None) -> Admission:
+               subject: str | None = None, client_ip: str | None = None, retry_after: int | None = None,
+               username: str | None = None) -> Admission:
         msg_id = self.db.insert_message(
             key_id=key["id"] if key else None,
             app_name=app_name or (key["name"] if key else "(unauthenticated)"),
             from_addr=from_addr, recipients=recipients, subject=subject, status="rejected", error=error,
-            client_ip=client_ip, source=source)
+            client_ip=client_ip, source=source, username=username or (key["username"] if key else None))
         return Admission(False, msg_id, status_code, error, retry_after)
 
     # ------------------------------------------------------------ admission
     def admit(self, *, key: dict, source: str, from_addr: str, recipients: dict, subject: str, payload: dict,
-              has_html: bool, attachment_count: int, size_bytes: int, client_ip: str | None) -> Admission:
+              has_html: bool, attachment_count: int, size_bytes: int, client_ip: str | None,
+              username: str | None = None) -> Admission:
         s = self.settings
         ctx = dict(source=source, key=key, from_addr=from_addr, recipients=recipients, subject=subject,
-                   client_ip=client_ip)
+                   client_ip=client_ip, username=username)
 
         n_rcpt = sum(len(v or []) for v in recipients.values())
         if n_rcpt == 0:
@@ -81,7 +83,8 @@ class Relay:
                 msg_id = self.db.insert_message(
                     key_id=key["id"], app_name=key["name"], from_addr=from_addr, recipients=recipients,
                     subject=subject, has_html=has_html, attachment_count=attachment_count, size_bytes=size_bytes,
-                    status="queued", client_ip=client_ip, payload=payload, source=source)
+                    status="queued", client_ip=client_ip, payload=payload, source=source,
+                    username=username or key["username"])
         if limit_err:
             return self.reject(limit_err, status_code=429, retry_after=60, **ctx)
         self._notify()

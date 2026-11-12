@@ -34,6 +34,14 @@ def slugify_username(name: str, max_len: int = 32) -> str:
     return s[:max_len].strip("-") or "app"
 
 
+def clean_username(raw: str | None, max_len: int = 100) -> str | None:
+    """Make a client-supplied login name safe to store and display (control characters out, bounded length)."""
+    if raw is None:
+        return None
+    s = "".join(ch for ch in raw if ch.isprintable())[:max_len].strip()
+    return s or None
+
+
 def hash_key(full_key: str) -> str:
     # Keys carry 256 bits of randomness, so a fast hash is appropriate (no need for bcrypt/argon2).
     return hashlib.sha256(full_key.encode()).hexdigest()

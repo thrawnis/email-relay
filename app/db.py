@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS messages (
     provider_id       TEXT,
     client_ip         TEXT,
     source            TEXT,             -- api | smtp | admin
+    username          TEXT,             -- SMTP login name as typed (even when auth failed); API: the key's username
     payload           TEXT              -- full request JSON; cleared once delivered
 );
 CREATE INDEX IF NOT EXISTS ix_messages_created ON messages(created_at);
@@ -93,6 +94,8 @@ class Database:
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(messages)").fetchall()}
         if "source" not in cols:
             self._conn.execute("ALTER TABLE messages ADD COLUMN source TEXT")
+        if "username" not in cols:
+            self._conn.execute("ALTER TABLE messages ADD COLUMN username TEXT")
         key_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(api_keys)").fetchall()}
         if "username" not in key_cols:
             self._conn.execute("ALTER TABLE api_keys ADD COLUMN username TEXT")
@@ -214,7 +217,8 @@ class Database:
                        recipients: dict | None, subject: str | None, has_html: bool = False,
                        attachment_count: int = 0, size_bytes: int = 0, status: str,
                        error: str | None = None, client_ip: str | None = None,
-                       payload: dict | None = None, source: str | None = None) -> str:
+                       payload: dict | None = None, source: str | None = None,
+                       username: str | None = None) -> str:
         msg_id = uuid.uuid4().hex
         now = time.time()
         recipients = recipients or {}
@@ -223,11 +227,11 @@ class Database:
             c.execute(
                 "INSERT INTO messages (id, created_at, updated_at, key_id, app_name, from_addr, recipients,"
                 " recipients_search, subject, has_html, attachment_count, size_bytes, status, attempts,"
-                " next_attempt_at, error, client_ip, payload, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)",
+                " next_attempt_at, error, client_ip, payload, source, username) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)",
                 (msg_id, now, now, key_id, app_name, from_addr, json.dumps(recipients), search,
                  (subject or "")[:998], int(has_html), attachment_count, size_bytes, status,
                  now if status in PENDING_STATUSES else None, error, client_ip,
-                 json.dumps(payload) if payload is not None else None, source),
+                 json.dumps(payload) if payload is not None else None, source, username),
             )
             self._event(c, msg_id, status, error)
         return msg_id
@@ -316,8 +320,8 @@ class Database:
         if q:
             like = f"%{q.lower()}%"
             where.append("(LOWER(subject) LIKE ? OR recipients_search LIKE ? OR LOWER(error) LIKE ?"
-                         " OR id = ? OR LOWER(from_addr) LIKE ?)")
-            params += [like, like, like, q.strip(), like]
+                         " OR id = ? OR LOWER(from_addr) LIKE ? OR LOWER(username) LIKE ?)")
+            params += [like, like, like, q.strip(), like, like]
         if key_id is not None:
             where.append("key_id = ?")
             params.append(key_id)
@@ -338,7 +342,7 @@ class Database:
         total = self.query_one(f"SELECT COUNT(*) AS n FROM messages {clause}", params)["n"]
         rows = self.query(
             f"SELECT id, created_at, updated_at, key_id, app_name, from_addr, recipients, subject, has_html,"
-            f" attachment_count, size_bytes, status, attempts, next_attempt_at, error, provider_id, client_ip, source"
+            f" attachment_count, size_bytes, status, attempts, next_attempt_at, error, provider_id, client_ip, source, username"
             f" FROM messages {clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (*params, limit, offset))
         for r in rows:

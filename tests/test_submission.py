@@ -106,7 +106,7 @@ def test_auth_required_and_bad_key_logged(smtp_env):
         with pytest.raises(smtplib.SMTPAuthenticationError):
             s.login("gitea", "erk_wrong")
     rejected = client.get("/admin/api/messages?status=rejected").json()["items"]
-    assert rejected and "SMTP AUTH failed" in rejected[0]["error"] and rejected[0]["source"] == "smtp"
+    assert rejected and "SMTP login failed" in rejected[0]["error"] and rejected[0]["source"] == "smtp"
 
 
 def test_disallowed_from_and_rate_limit(smtp_env):
@@ -152,3 +152,58 @@ def test_smtp_backend_forwards_raw_bytes(monkeypatch):
         "notify@example.com", None)
     assert calls == {"frm": "notify@example.com", "rcpts": ["a@x.com", "hidden@x.com"], "data": raw}
     assert res.provider_id == "<abc@x>"
+
+
+def _log(client, **q):
+    from urllib.parse import urlencode
+    return client.get("/admin/api/messages?" + urlencode(q)).json()["items"]
+
+
+def test_failed_smtp_logins_record_the_attempted_username(smtp_env):
+    client, backend, app, settings, key = smtp_env
+    with smtplib.SMTP("localhost", settings.submission_starttls_port, timeout=5) as s:
+        s.starttls(context=tls_ctx(settings))
+        s.ehlo()
+        for user in ("Hacker@Example.com", "root", "adm\x07in"):
+            with pytest.raises(smtplib.SMTPAuthenticationError):
+                s.login(user, "erk_wrong")
+            s.ehlo()
+    rows = _log(client, status="rejected")
+    assert sorted(r["username"] for r in rows) == ["Hacker@Example.com", "admin", "root"]  # once each; control chars stripped
+    assert all(r["source"] == "smtp" and r["app_name"] == "(unauthenticated)" and "SMTP login failed" in r["error"]
+               and r["client_ip"] for r in rows)
+    assert [r["username"] for r in _log(client, q="hacker")] == ["Hacker@Example.com"]  # searchable
+
+    # a revoked key is attributed to its app, still with the typed username
+    k = client.get("/admin/api/keys").json()[0]
+    client.post(f"/admin/api/keys/{k['id']}/revoke")
+    with smtplib.SMTP("localhost", settings.submission_starttls_port, timeout=5) as s:
+        s.starttls(context=tls_ctx(settings))
+        s.ehlo()
+        with pytest.raises(smtplib.SMTPAuthenticationError):
+            s.login("old-gitea-name", key)
+    row = _log(client, q="old-gitea-name")[0]
+    assert row["app_name"] == "gitea" and row["username"] == "old-gitea-name" and "revoked" in row["error"]
+
+
+def test_username_recorded_on_accepted_and_rejected_sends(smtp_env):
+    client, backend, app, settings, key = smtp_env
+    with smtplib.SMTP_SSL("localhost", settings.submission_tls_port, timeout=5, context=tls_ctx(settings)) as s:
+        s.login("Typed-By-App", key)
+        s.send_message(make_msg())
+        with pytest.raises(smtplib.SMTPDataError):
+            s.send_message(make_msg(frm="someone@gmail.com"))
+    rows = _log(client)
+    assert len(rows) == 2 and {r["username"] for r in rows} == {"Typed-By-App"}
+    assert {r["status"] for r in rows} == {"queued", "rejected"} or {r["status"] for r in rows} == {"sent", "rejected"}
+
+
+def test_api_attempts_carry_the_key_username(smtp_env):
+    client, backend, app, settings, key = smtp_env
+    client.post("/api/send", json={"to": "a@b.com", "subject": "s", "text": "t", "from": "evil@gmail.com"},
+                headers={"Authorization": f"Bearer {key}"})
+    client.post("/api/send", json={"to": "a@b.com"}, headers={"Authorization": "Bearer erk_nope"})
+    by_app = {r["app_name"]: r["username"] for r in _log(client, status="rejected")}
+    assert by_app == {"gitea": "gitea", "(unauthenticated)": None}
+    detail = client.get(f"/admin/api/messages/{_log(client, q='gitea')[0]['id']}").json()
+    assert detail["username"] == "gitea"

@@ -300,12 +300,13 @@ async function loadLogs() {
     return `<tr class="clickable" data-id="${esc(m.id)}">
       <td style="white-space:nowrap">${fmtTime(m.created_at)}</td>
       <td>${esc(m.app_name)}</td>
+      <td>${esc(m.username || "")}</td>
       <td>${esc(m.source || "")}</td>
       <td class="ellip">${esc(to.join(", "))}${bcc ? ` <span class="muted">+${bcc} bcc</span>` : ""}</td>
       <td class="ellip">${esc(m.subject)}${m.attachment_count ? ` <span class="muted">📎${m.attachment_count}</span>` : ""}</td>
       <td>${badge(m.status)}</td><td>${m.attempts}</td>
       <td class="ellip">${esc(m.error)}</td></tr>`;
-  }).join("") : `<tr><td colspan="8" class="muted">No matching messages</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="muted">No matching messages</td></tr>`;
   const end = Math.min(logOffset + PAGE, total);
   $("#page-info").textContent = total ? `${logOffset + 1}–${end} of ${total}` : "";
   $("#prev").disabled = logOffset === 0;
@@ -333,7 +334,7 @@ async function openMessage(id) {
     ["Updated", fmtTime(m.updated_at)], ["Attempts", m.attempts],
     ["Next attempt", m.next_attempt_at ? fmtTime(m.next_attempt_at) : "—"],
     ["Size", `${m.size_bytes} bytes, ${m.attachment_count} attachment(s), ${m.has_html ? "HTML" : "text only"}`],
-    ["Message-ID", `<code>${esc(m.provider_id)}</code>`], ["Via", esc(m.source)], ["Client IP", esc(m.client_ip)], ["Error", esc(m.error)],
+    ["Message-ID", `<code>${esc(m.provider_id)}</code>`], ["Username", esc(m.username)], ["Via", esc(m.source)], ["Client IP", esc(m.client_ip)], ["Error", esc(m.error)],
   ].filter(([, v]) => v !== "" && v !== "<code></code>");
   const events = m.events.map((ev) => `<tr><td style="white-space:nowrap">${fmtTime(ev.ts)}</td><td>${esc(ev.event)}</td><td>${esc(ev.detail)}</td></tr>`).join("");
   const body = m.payload

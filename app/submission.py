@@ -12,6 +12,7 @@ delivery with the original MIME preserved (inline images, headers, etc).
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import os
 import ssl
@@ -24,6 +25,7 @@ from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import SMTP, AuthResult, LoginPassword
 
 from .config import Settings
+from .security import clean_username
 from .service import Relay
 from .tls import describe_cert, resolve_tls_files
 
@@ -46,13 +48,19 @@ class SubmissionHandler:
     def authenticate(self, server, session, envelope, mechanism, auth_data) -> AuthResult:
         if not isinstance(auth_data, LoginPassword):
             return AuthResult(success=False, handled=False)
-        username = auth_data.login.decode(errors="replace")
+        username = clean_username(auth_data.login.decode(errors="replace")) or "(empty)"
         key, err = self.relay.authenticate(auth_data.password.decode(errors="replace"))
         if err:
-            self.relay.reject(f"SMTP AUTH failed (user '{username}'): {err}", status_code=401, source="smtp",
-                              key=key, client_ip=self._peer(session))
-            log.warning("SMTP AUTH failed from %s user=%r: %s", self._peer(session), username, err)
+            # Clients retry the same credentials with another mechanism (PLAIN, then LOGIN): log it once.
+            fingerprint = (username, hashlib.sha256(auth_data.password).hexdigest())
+            if getattr(session, "relay_last_failed", None) != fingerprint:
+                session.relay_last_failed = fingerprint
+                # Logged as a rejected attempt carrying the username that was typed.
+                self.relay.reject(f"SMTP login failed: {err}", status_code=401, source="smtp", key=key,
+                                  client_ip=self._peer(session), username=username)
+                log.warning("SMTP AUTH failed from %s user=%r: %s", self._peer(session), username, err)
             return AuthResult(success=False, handled=False)
+        session.relay_username = username  # remembered for every message sent on this connection
         return AuthResult(success=True, auth_data=key)
 
     async def handle_DATA(self, server, session, envelope) -> str:
@@ -84,7 +92,8 @@ class SubmissionHandler:
             payload=payload,
             has_html=any(p.get_content_type() == "text/html" for p in msg.walk()),
             attachment_count=sum(1 for p in msg.walk() if p.get_content_disposition() == "attachment"),
-            size_bytes=len(raw), client_ip=self._peer(session))
+            size_bytes=len(raw), client_ip=self._peer(session),
+            username=getattr(session, "relay_username", None))
         if adm.ok:
             return f"250 2.0.0 OK queued as {adm.message_id}"
         if adm.status_code == 429:

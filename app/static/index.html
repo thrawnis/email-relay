@@ -115,7 +115,7 @@
       <section id="tab-logs" class="tab-panel hidden">
         <div class="card">
           <form id="log-filters" class="filters">
-            <input type="search" id="f-q" placeholder="Search subject, recipient, error, id…">
+            <input type="search" id="f-q" placeholder="Search subject, recipient, username, error, id…">
             <select id="f-app"><option value="">All apps</option></select>
             <select id="f-status">
               <option value="">Any status</option>
@@ -133,7 +133,7 @@
             <button type="button" id="f-reset" class="secondary">Reset</button>
           </form>
           <table class="logs">
-            <thead><tr><th>Time</th><th>App</th><th>Via</th><th>To</th><th>Subject</th><th title="sent = accepted by the upstream mail server. Later bounces go to the sender mailbox, not the relay.">Status ⓘ</th><th>Tries</th><th>Error</th></tr></thead>
+            <thead><tr><th>Time</th><th>App</th><th>Username</th><th>Via</th><th>To</th><th>Subject</th><th title="sent = accepted by the upstream mail server. Later bounces go to the sender mailbox, not the relay.">Status ⓘ</th><th>Tries</th><th>Error</th></tr></thead>
             <tbody id="logs-body"></tbody>
           </table>
           <div class="pager">
