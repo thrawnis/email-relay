@@ -355,6 +355,13 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
         require_admin(request)
         return {**db.stats(), "apps": db.distinct_apps()}
 
+    @app.get("/admin/api/stats/timeseries")
+    async def timeseries(request: Request, since: float, until: float):
+        require_admin(request)
+        if until <= since or until - since > 400 * 86400:
+            raise HTTPException(422, "Range must be positive and at most 400 days")
+        return db.timeseries(since, until)
+
     @app.post("/admin/api/test-send", status_code=202)
     async def test_send(request: Request):
         require_admin(request)

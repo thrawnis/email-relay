@@ -23,6 +23,7 @@
       <nav>
         <button data-tab="overview" class="tab active">Overview</button>
         <button data-tab="keys" class="tab">API keys</button>
+        <button data-tab="charts" class="tab">Charts</button>
         <button data-tab="logs" class="tab">Send log</button>
       </nav>
       <button id="logout" class="secondary">Sign out</button>
@@ -63,6 +64,50 @@
               <th>Failed 24h</th><th>Last used</th><th>Status</th><th></th></tr></thead>
             <tbody id="keys-body"></tbody>
           </table>
+        </div>
+      </section>
+
+      <!-- Charts -->
+      <section id="tab-charts" class="tab-panel hidden">
+        <div class="filters-row">
+          <div id="c-presets" class="segmented" role="group" aria-label="Date range">
+            <button type="button" data-days="7">Last 7 days</button>
+            <button type="button" data-days="14" class="active" aria-pressed="true">Last 14 days</button>
+            <button type="button" data-days="30">Last 30 days</button>
+            <button type="button" data-days="90">Last 90 days</button>
+          </div>
+          <label class="inline-label">From <input type="date" id="c-from"></label>
+          <label class="inline-label">To <input type="date" id="c-to"></label>
+          <span id="c-note" class="error"></span>
+        </div>
+        <p id="c-range-label" class="muted"></p>
+        <div id="charts-root">
+          <div id="c-kpis" class="stats"></div>
+
+          <div class="card">
+            <h2>Emails per day, all API keys</h2>
+            <div class="legend" aria-label="Legend">
+              <span class="legend-item static"><span class="key rect" style="background:var(--c-sent)"></span><span class="legend-name">Sent</span></span>
+              <span class="legend-item static"><span class="key rect" style="background:var(--c-bad)"></span><span class="legend-name">Failed or partial</span></span>
+            </div>
+            <div id="chart-total" class="chart"></div>
+          </div>
+
+          <div class="card">
+            <h2>Emails sent per day, by API key</h2>
+            <p class="muted small">The seven busiest keys in this range get their own line; the rest are combined. Click a name to hide or show its line.</p>
+            <div id="legend-keys" class="legend" aria-label="Legend"></div>
+            <div id="chart-keys" class="chart"></div>
+            <p id="keys-empty" class="muted" hidden>No emails were sent in this range.</p>
+          </div>
+
+          <details class="card">
+            <summary>Show the data as tables</summary>
+            <h3>Per API key</h3>
+            <table><thead><tr><th>App</th><th>Username</th><th>Sent</th><th>Failed or partial</th><th>Total</th></tr></thead><tbody id="table-keys"></tbody></table>
+            <h3>Per day</h3>
+            <table><thead><tr><th>Date</th><th>Sent</th><th>Failed or partial</th><th>Total</th></tr></thead><tbody id="table-days"></tbody></table>
+          </details>
         </div>
       </section>
 
@@ -144,6 +189,7 @@
     <div id="msg-body"></div>
   </dialog>
 
+  <script src="/static/charts.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

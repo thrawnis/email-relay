@@ -44,7 +44,7 @@ $("#logout").addEventListener("click", async () => { await api("/admin/api/logou
 function switchTab(name) {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("hidden", p.id !== `tab-${name}`));
-  ({ overview: loadOverview, keys: loadKeys, logs: loadLogs })[name]();
+  ({ overview: loadOverview, keys: loadKeys, charts: () => window.loadCharts(), logs: loadLogs })[name]();
 }
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 

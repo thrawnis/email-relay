@@ -360,6 +360,19 @@ class Database:
             (now - 86400,))
         return {"by_status": by_status, "pending": pending, "per_app_24h": per_app}
 
+    def timeseries(self, since: float, until: float) -> dict:
+        """Hourly (UTC) counts per key for charting; the browser folds hours into its own local days.
+
+        ok = delivered ('sent'); bad = 'partial' or 'failed'. Rejected and still-pending messages are not counted.
+        """
+        rows = self.query(
+            "SELECT CAST(created_at / 3600 AS INTEGER) * 3600 AS h, key_id,"
+            " SUM(status = 'sent') AS ok, SUM(status IN ('partial','failed')) AS bad"
+            " FROM messages WHERE created_at >= ? AND created_at < ? AND status IN ('sent','partial','failed')"
+            " GROUP BY h, key_id", (since, until))
+        keys = self.query("SELECT id, name, username, revoked_at FROM api_keys ORDER BY id")
+        return {"buckets": rows, "keys": keys}
+
     def distinct_apps(self) -> list[str]:
         return [r["app_name"] for r in self.query(
             "SELECT DISTINCT app_name FROM messages WHERE app_name IS NOT NULL ORDER BY app_name")]

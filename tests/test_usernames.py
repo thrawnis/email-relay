@@ -60,3 +60,25 @@ def test_existing_keys_get_backfilled_usernames(tmp_path):
     db = Database(path)
     by_id = {k["id"]: k["username"] for k in db.list_keys()}
     assert by_id == {1: "grafana-alerts", 2: "grafana-alerts-2", 3: "wiki"}  # oldest key keeps the plain name
+
+
+def test_timeseries_endpoint(client):
+    import time
+    a = client.post("/admin/api/keys", json={"name": "alpha"}).json()
+    b = client.post("/admin/api/keys", json={"name": "beta"}).json()
+    db = client.app.state.db
+    now = time.time()
+    for key, status, age_days in [(a, "sent", 0), (a, "sent", 0), (a, "failed", 1), (b, "partial", 1),
+                                  (b, "sent", 3), (b, "rejected", 0), (b, "queued", 0)]:
+        mid = db.insert_message(key_id=key["id"], app_name=key["name"], from_addr="n@example.com",
+                                recipients={"to": ["x@example.com"]}, subject="s", status=status)
+        db.query_one("SELECT 1")  # keep the helper simple: backdate directly
+        with db.tx() as c:
+            c.execute("UPDATE messages SET created_at = ? WHERE id = ?", (now - age_days * 86400, mid))
+    r = client.get(f"/admin/api/stats/timeseries?since={now - 5 * 86400}&until={now + 60}").json()
+    ok = sum(x["ok"] for x in r["buckets"])
+    bad = sum(x["bad"] for x in r["buckets"])
+    assert (ok, bad) == (3, 2)  # rejected and queued are excluded
+    assert [k["username"] for k in r["keys"]] == ["alpha", "beta"]
+    assert client.get("/admin/api/stats/timeseries?since=10&until=5").status_code == 422
+    assert client.get("/admin/api/stats/timeseries?since=0&until=999999999").status_code == 422
