@@ -165,6 +165,15 @@ put the CA certificate in `./data/` and set `SMTP_CA_FILE=/data/<name>.crt`. Don
 4. It builds with `docker buildx build --tag email-relay:latest --build-arg GIT_SHA=<sha> --load .`, not `docker compose build`. The Dockerfile bakes the SHA in as `LABEL git_sha=...`.
 5. It restarts with `docker compose down && docker compose up -d --no-build`, then waits for the healthcheck to pass.
 
+**Deploy marker for dashboards:** every run that gets as far as the deploy decision prints exactly one machine-readable line to stdout, before any build or restart starts:
+
+| Line | Meaning |
+|---|---|
+| `##DEPLOY_STATUS:UPDATED##` | The script is going to deploy: new commits, discarded local changes, `--force`, or a missing/stale/stopped container |
+| `##DEPLOY_STATUS:NO_CHANGE##` | Nothing to do; the script exits 0 without building |
+
+It reports what was detected, not whether the deploy then succeeded: a failure after `UPDATED` is still signalled by the exit code. A run that fails before the decision (for example a missing `.env` or an invalid compose file) prints no marker.
+
 There is no self-restart handoff: the relay never redeploys itself from inside its own container. If a deployment tool triggers it as an ordinary app, this script works as is.
 
 ### Data and backups

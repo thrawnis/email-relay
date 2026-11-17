@@ -78,10 +78,15 @@ fi
 if [[ $FORCE -eq 0 && "$BEFORE" == "$AFTER" ]]; then
   if [[ -n "$RUNNING_SHA" && "$RUNNING_SHA" == "$AFTER" && "${RUNNING_STATE:-}" == "running" ]]; then
     log "No new commits and running container is current. Nothing to do (use --force to rebuild anyway)."
+    echo "##DEPLOY_STATUS:NO_CHANGE##"  # machine-readable marker for Deployment Helper
     exit 0
   fi
   log "No new commits, but running container is missing/stale/stopped — rebuilding anyway."
 fi
+
+# From here on this run deploys: new commits, discarded local changes, --force, or a stale/stopped container.
+# Printed before building so it reflects what was detected, not whether the deploy then succeeds.
+echo "##DEPLOY_STATUS:UPDATED##"  # machine-readable marker for Deployment Helper
 
 # 4. Build with buildx directly (not `docker compose build`), baking the commit in as a label.
 log "Building $IMAGE at ${AFTER:0:12}"
