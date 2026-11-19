@@ -29,6 +29,7 @@ def _list(name: str) -> list[str]:
 @dataclass
 class Settings:
     # Admin UI
+    admin_username: str = "eradmin"
     admin_password: str = ""
     secret_key: str = ""
 
@@ -102,6 +103,7 @@ class Settings:
                   for n in ("HTTP_TLS", "REQUIRE_HTTPS", "COOKIE_SECURE") if _env(n) and not _bool(n, True)]
         return cls(
             config_errors=errors,
+            admin_username=_env("ADMIN_USERNAME", "eradmin"),
             admin_password=_env("ADMIN_PASSWORD"),
             secret_key=_env("SECRET_KEY"),
             db_path=_env("DB_PATH", "/data/relay.db"),
@@ -141,6 +143,8 @@ class Settings:
 
     def validate(self) -> list[str]:
         problems = []
+        if not self.admin_username or len(self.admin_username) > 64 or not self.admin_username.isprintable():
+            problems.append("ADMIN_USERNAME must be 1-64 printable characters")
         if not self.admin_password:
             problems.append("ADMIN_PASSWORD is not set")
         if len(self.secret_key) < 32:

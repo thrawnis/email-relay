@@ -22,7 +22,7 @@ from .backends import Backend, get_backend
 from .config import Settings
 from .db import Database
 from .schemas import KeyCreate, KeyUpdate, SendRequest
-from .security import LoginThrottle, check_password, extract_key, generate_key
+from .security import LoginThrottle, clean_username, check_admin_login, extract_key, generate_key
 from .service import Relay
 from .submission import SubmissionServer
 from .worker import Worker
@@ -233,11 +233,12 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
         if throttle.blocked(ip):
             raise HTTPException(429, "Too many failed attempts; try again later")
         data = await request.json()
-        if not check_password(str(data.get("password", "")), settings.admin_password):
+        typed = clean_username(str(data.get("username", ""))) or ""
+        if not check_admin_login(typed, str(data.get("password", "")), settings.admin_username, settings.admin_password):
             throttle.fail(ip)
             await asyncio.sleep(0.5)
-            log.warning("Failed admin login from %s", ip)
-            raise HTTPException(401, "Wrong password")
+            log.warning("Failed admin login from %s (username %r)", ip, typed or "(none)")
+            raise HTTPException(401, "Wrong username or password")
         throttle.reset(ip)
         request.session["admin"] = True
         return {"ok": True}
@@ -249,7 +250,8 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
 
     @app.get("/admin/api/me")
     async def me(request: Request):
-        return {"admin": bool(request.session.get("admin"))}
+        admin = bool(request.session.get("admin"))
+        return {"admin": admin, "username": settings.admin_username if admin else None}
 
     @app.get("/admin/api/config")
     async def config(request: Request):

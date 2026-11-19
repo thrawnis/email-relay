@@ -41,7 +41,7 @@ cp .env.example .env
 
 Edit `.env` and set at least:
 
-- `ADMIN_PASSWORD`
+- `ADMIN_USERNAME` (defaults to `eradmin`) and `ADMIN_PASSWORD`: what you sign in to the admin UI with
 - `SECRET_KEY` (generate it with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`)
 - `MAIL_FROM` and the `SMTP_*` settings for `notify@example.com`
 - `PUBLIC_HOSTNAME`, `SUBMISSION_HOSTNAME` and `TRUSTED_PROXIES` (see below)

@@ -30,7 +30,7 @@ def smtp_env(tmp_path):
     backend = FakeBackend()
     app = create_app(settings, backend)
     with TestClient(app, base_url="https://testserver") as client:
-        client.post("/admin/api/login", json={"password": PASSWORD})
+        client.post("/admin/api/login", json={"username": "eradmin", "password": PASSWORD})
         key = client.post("/admin/api/keys", json={"name": "gitea", "rate_per_minute": 2}).json()["api_key"]
         yield client, backend, app, settings, key
 

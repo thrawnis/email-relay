@@ -31,7 +31,7 @@ def client(tmp_path):
     s = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "u.db"),
                  mail_from="notify@example.com", mail_backend="console")
     with TestClient(create_app(s, FakeBackend()), base_url="https://testserver") as c:
-        c.post("/admin/api/login", json={"password": PASSWORD})
+        c.post("/admin/api/login", json={"username": "eradmin", "password": PASSWORD})
         yield c
 
 
@@ -121,3 +121,30 @@ def test_log_filter_by_key_id(client):
     client.patch(f"/admin/api/keys/{a['id']}", json={"name": "alpha renamed"})
     assert get(key_id=a["id"])["total"] == 3
     assert client.get("/admin/api/messages?key_id=abc").status_code == 422
+
+
+def test_admin_login_needs_the_username_and_password(tmp_path):
+    s = Settings(admin_password=PASSWORD, secret_key="x" * 40, db_path=str(tmp_path / "l.db"),
+                 mail_from="n@example.com", mail_backend="console")
+    assert s.admin_username == "eradmin"
+    with TestClient(create_app(s, FakeBackend()), base_url="https://testserver") as c:
+        def login(**body):
+            return c.post("/admin/api/login", json=body).status_code
+        assert login(password=PASSWORD) == 401                                    # username missing
+        assert login(username="admin", password=PASSWORD) == 401                  # wrong username
+        assert login(username="eradmin", password="wrong") == 401                 # wrong password
+        assert c.get("/admin/api/keys").status_code == 401                        # none of those logged in
+        assert c.post("/admin/api/login", json={"username": "ERAdmin ", "password": PASSWORD}).status_code == 200
+        assert c.get("/admin/api/me").json() == {"admin": True, "username": "eradmin"}
+        assert c.get("/admin/api/keys").status_code == 200
+        c.post("/admin/api/logout")
+        assert c.get("/admin/api/me").json() == {"admin": False, "username": None}
+
+
+def test_admin_username_is_configurable(tmp_path, monkeypatch):
+    for k, v in {"ADMIN_USERNAME": "ops", "ADMIN_PASSWORD": PASSWORD, "SECRET_KEY": "x" * 40, "MAIL_FROM": "a@b.com",
+                 "MAIL_BACKEND": "console", "DB_PATH": str(tmp_path / "c.db")}.items():
+        monkeypatch.setenv(k, v)
+    with TestClient(create_app(), base_url="https://testserver") as c:
+        assert c.post("/admin/api/login", json={"username": "eradmin", "password": PASSWORD}).status_code == 401
+        assert c.post("/admin/api/login", json={"username": "ops", "password": PASSWORD}).status_code == 200

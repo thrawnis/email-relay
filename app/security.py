@@ -65,6 +65,13 @@ def address_matches(addr: str, patterns: list[str]) -> bool:
     return False
 
 
+def check_admin_login(username: str, password: str, expected_username: str, expected_password: str) -> bool:
+    """Username (case-insensitive) and password, both always compared so timing doesn't reveal which was wrong."""
+    user_ok = hmac.compare_digest(username.strip().casefold().encode(), expected_username.strip().casefold().encode())
+    pass_ok = check_password(password, expected_password)
+    return user_ok and pass_ok
+
+
 def check_password(given: str, expected: str) -> bool:
     return bool(expected) and hmac.compare_digest(given.encode(), expected.encode())
 

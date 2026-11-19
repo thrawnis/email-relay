@@ -41,7 +41,7 @@ def env(tmp_path):
 
 
 def login(client):
-    assert client.post("/admin/api/login", json={"password": PASSWORD}).status_code == 200
+    assert client.post("/admin/api/login", json={"username": "eradmin", "password": PASSWORD}).status_code == 200
 
 
 def make_key(client, **kw):
@@ -265,7 +265,7 @@ def test_require_https_rejects_plain_http(proxied):
 
 def test_https_via_proxy_send_and_client_ip(proxied):
     client, app = proxied
-    client.post("/admin/api/login", json={"password": PASSWORD}, headers=HTTPS)
+    client.post("/admin/api/login", json={"username": "eradmin", "password": PASSWORD}, headers=HTTPS)
     # Secure cookie: the TestClient (plain http base_url) won't resend it, so pass it explicitly
     cookie = client.cookies.get("relay_admin")
     key = client.post("/admin/api/keys", json={"name": "svc"}, headers=HTTPS,
@@ -285,7 +285,7 @@ def test_api_blocked_through_cloudflare_tunnel(proxied):
     assert client.get("/api/messages/x", headers=TUNNEL).status_code == 403
     # admin UI is still reachable through the tunnel
     assert client.get("/admin", headers=TUNNEL).status_code == 200
-    assert client.post("/admin/api/login", json={"password": PASSWORD}, headers=TUNNEL).status_code == 200
+    assert client.post("/admin/api/login", json={"username": "eradmin", "password": PASSWORD}, headers=TUNNEL).status_code == 200
 
 
 @pytest.mark.parametrize("name", ["HTTP_TLS", "REQUIRE_HTTPS", "COOKIE_SECURE"])

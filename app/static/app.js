@@ -26,15 +26,16 @@ async function api(path, opts = {}) {
 }
 
 // ---------------------------------------------------------------- auth
-function showLogin() { $("#app-view").classList.add("hidden"); $("#login-view").classList.remove("hidden"); $("#login-password").focus(); }
+function showLogin() { $("#app-view").classList.add("hidden"); $("#login-view").classList.remove("hidden"); ($("#login-username").value ? $("#login-password") : $("#login-username")).focus(); }
 function showApp() { $("#login-view").classList.add("hidden"); $("#app-view").classList.remove("hidden"); switchTab("overview"); }
 
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#login-error").textContent = "";
   try {
-    await api("/admin/api/login", { method: "POST", body: { password: $("#login-password").value } });
+    await api("/admin/api/login", { method: "POST", body: { username: $("#login-username").value, password: $("#login-password").value } });
     $("#login-password").value = "";
+    $("#whoami").textContent = `Signed in as ${$("#login-username").value.trim()}`;
     showApp();
   } catch (err) { $("#login-error").textContent = err.message; }
 });
@@ -418,4 +419,4 @@ async function openMessage(id) {
 $("#msg-close").addEventListener("click", () => $("#msg-dialog").close());
 
 // ---------------------------------------------------------------- boot
-api("/admin/api/me").then((r) => (r.admin ? showApp() : showLogin())).catch(showLogin);
+api("/admin/api/me").then((r) => { if (r.admin) { $("#whoami").textContent = `Signed in as ${r.username}`; showApp(); } else showLogin(); }).catch(showLogin);

@@ -15,7 +15,7 @@ def make(tmp_path, **kw):
 
 
 def key(client, **body):
-    client.post("/admin/api/login", json={"password": PASSWORD})
+    client.post("/admin/api/login", json={"username": "eradmin", "password": PASSWORD})
     return client.post("/admin/api/keys", json={"name": body.pop("name", "app"), **body}).json()
 
 
@@ -98,7 +98,7 @@ def test_flood_of_rejections_is_one_log_row(tmp_path):
 
 def test_connect_info_exposes_defaults_and_validation(tmp_path):
     with make(tmp_path, default_rate_per_minute=7, default_rate_per_day=70, global_rate_per_minute=9) as c:
-        c.post("/admin/api/login", json={"password": PASSWORD})
+        c.post("/admin/api/login", json={"username": "eradmin", "password": PASSWORD})
         assert c.get("/admin/api/connect-info").json()["limits"] == {
             "default_rate_per_minute": 7, "default_rate_per_day": 70, "global_rate_per_minute": 9}
         assert c.post("/admin/api/keys", json={"name": "x", "rate_per_minute": -1}).status_code == 422
